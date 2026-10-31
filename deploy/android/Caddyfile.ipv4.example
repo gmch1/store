@@ -1,0 +1,31 @@
+# Fixed IPv4 fallback. The Android host independently maintains its AAAA record.
+store.example.invalid {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+    @downloads {
+        method GET HEAD
+        path /fdroid/repo/* /healthz
+    }
+    handle @downloads {
+        reverse_proxy {
+            # Never resolve A here: it points back to this proxy.
+            dynamic a {
+                name store.example.invalid
+                port 443
+                versions ipv6
+                refresh 30s
+            }
+            transport http {
+                tls
+                tls_server_name store.example.invalid
+                dial_timeout 10s
+                response_header_timeout 30s
+            }
+            header_up Host store.example.invalid
+        }
+    }
+    handle {
+        respond 404
+    }
+}

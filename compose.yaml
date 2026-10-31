@@ -1,0 +1,59 @@
+name: ming-store
+services:
+  api:
+    build: .
+    image: ming-store:local
+    command: ["api", "--port", "8080"]
+    user: "${STORE_UID:-1000}:${STORE_GID:-1000}"
+    restart: unless-stopped
+    environment:
+      STORE_DATA: /data
+      STORE_REPO_URL: ${STORE_REPO_URL:-http://127.0.0.1:8766/fdroid/repo}
+      STORE_MAX_APK_BYTES: ${STORE_MAX_APK_BYTES:-536870912}
+      STORE_API_KEY_FILE: /run/secrets/store_api_key
+    ports:
+      - "${STORE_API_BIND:-127.0.0.1}:${STORE_API_PORT:-8767}:8080"
+    volumes:
+      - ./.local/data:/data:z
+      - ./.local/api-key:/run/secrets/store_api_key:ro,z
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+  downloads:
+    image: ming-store:local
+    command: ["downloads", "--port", "8080"]
+    user: "${STORE_UID:-1000}:${STORE_GID:-1000}"
+    restart: unless-stopped
+    environment:
+      STORE_DATA: /data
+    ports:
+      - "${STORE_DOWNLOAD_BIND:-127.0.0.1}:${STORE_DOWNLOAD_PORT:-8766}:8080"
+    volumes:
+      - ./.local/data:/data:ro,z
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}

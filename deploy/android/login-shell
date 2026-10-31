@@ -1,0 +1,4 @@
+#!/system/bin/sh
+# SSH authenticates in the Linux chroot. Shell commands use Android's mount
+# namespace so native administration (including new chroot mounts) works normally.
+exec /data/adb/magisk/busybox nsenter -t 1 -m -- /system/bin/sh -l "$@"

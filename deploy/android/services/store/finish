@@ -1,0 +1,3 @@
+#!/bin/sh
+python /app/deploy/android/cleanup_workers.py
+echo ming-store > /proc/1/root/sys/power/wake_unlock

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo ming-sshd > /proc/1/root/sys/power/wake_unlock

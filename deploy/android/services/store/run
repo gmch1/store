@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+exec 2>&1
+python /app/deploy/android/cleanup_workers.py
+echo ming-store > /proc/1/root/sys/power/wake_lock
+exec python /app/deploy/android/worker_exec.py --protected "$PPID" python /app/deploy/android/supervisor.py

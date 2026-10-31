@@ -1,0 +1,47 @@
+{
+    admin off
+    auto_https disable_redirects
+    servers {
+        protocols h1 h2
+    }
+}
+
+# Optional loopback download entry for a client on the same device.
+http://127.0.0.1:8766 {
+    bind 127.0.0.1
+    @repo {
+        method GET HEAD
+        path /fdroid/repo/*
+    }
+    handle @repo {
+        reverse_proxy 127.0.0.1:18766
+    }
+    handle {
+        respond 404
+    }
+}
+https://store.example.invalid {
+    bind ::
+    tls {
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    header {
+        X-Content-Type-Options nosniff
+        X-Robots-Tag "noindex, nofollow, noarchive"
+    }
+    @repo {
+        method GET HEAD
+        path /fdroid/repo/*
+    }
+    handle @repo {
+        reverse_proxy 127.0.0.1:18766
+    }
+    handle /healthz {
+        reverse_proxy 127.0.0.1:18766
+    }
+    handle {
+        respond 404
+    }
+}

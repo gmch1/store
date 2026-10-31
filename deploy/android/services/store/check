@@ -1,0 +1,2 @@
+#!/bin/sh
+exec python /app/deploy/android/health.py --check store >/dev/null 2>&1

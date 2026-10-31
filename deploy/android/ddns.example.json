@@ -1,0 +1,14 @@
+{
+  "zone_id": "00000000000000000000000000000000",
+  "zone_name": "example.invalid",
+  "interface": "wlan0",
+  "token_file": "/run/secrets/cloudflare_dns_token",
+  "interval_seconds": 60,
+  "retry_seconds": 30,
+  "records": [
+    {
+      "name": "store.example.invalid",
+      "comment": "Store direct IPv6 downloads; managed by store-downloads"
+    }
+  ]
+}

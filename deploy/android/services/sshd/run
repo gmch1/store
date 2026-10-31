@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+exec 2>&1
+mkdir -p /run/sshd
+echo 0 > /proc/self/oom_score_adj
+echo ming-sshd > /proc/1/root/sys/power/wake_lock
+exec python /app/deploy/android/worker_exec.py "$PPID" /usr/sbin/sshd -D -e -f /config/maintenance-sshd.conf

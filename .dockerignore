@@ -1,0 +1,6 @@
+**
+!Dockerfile
+!requirements.txt
+!LICENSE
+!store/
+!store/*.py

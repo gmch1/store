@@ -1,0 +1,3 @@
+#!/bin/sh
+exec 2>&1
+exec python /app/deploy/android/worker_exec.py "$PPID" python /app/deploy/android/health.py
