@@ -499,6 +499,103 @@ index 7f236cf..542355c 100644
      .setContentTitle(context.getString(R.string.new_updates_available))
      .setContentText(
          context.resources.getQuantityString(
+diff --git a/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt b/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
+index 6f6ed35..5c97d9d 100644
+--- a/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
++++ b/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
+@@ -41,14 +41,14 @@ class PreferenceSettingsRepositoryTest {
+     fun setup() {
+         exporter = mockk(relaxed = true)
+         val dataStore = PreferenceDataStoreFactory.create(
+-            scope = testScope,
++            scope = testScope.backgroundScope,
+             produceFile = { File(tmpFolder.newFolder(), "test_settings.preferences_pb") },
+         )
+         repository = PreferenceSettingsRepository(dataStore, exporter)
+     }
+ 
+     @Test
+-    fun `getInitial returns default settings`() = runTest {
++    fun `getInitial returns default settings`() = testScope.runTest {
+         val settings = repository.getInitial()
+         assertEquals("system", settings.language)
+         assertEquals(Theme.SYSTEM, settings.theme)
+@@ -58,21 +58,21 @@ class PreferenceSettingsRepositoryTest {
+     }
+ 
+     @Test
+-    fun `setTheme updates theme setting`() = runTest {
++    fun `setTheme updates theme setting`() = testScope.runTest {
+         repository.setTheme(Theme.DARK)
+         val settings = repository.getInitial()
+         assertEquals(Theme.DARK, settings.theme)
+     }
+ 
+     @Test
+-    fun `setLanguage updates language`() = runTest {
++    fun `setLanguage updates language`() = testScope.runTest {
+         repository.setLanguage("de")
+         val settings = repository.getInitial()
+         assertEquals("de", settings.language)
+     }
+ 
+     @Test
+-    fun `toggleFavourites adds and removes package`() = runTest {
++    fun `toggleFavourites adds and removes package`() = testScope.runTest {
+         repository.toggleFavourites("com.example.app")
+         var settings = repository.getInitial()
+         assertTrue(settings.favouriteApps.contains("com.example.app"))
+@@ -83,7 +83,7 @@ class PreferenceSettingsRepositoryTest {
+     }
+ 
+     @Test
+-    fun `setRepoEnabled manages enabled repos`() = runTest {
++    fun `setRepoEnabled manages enabled repos`() = testScope.runTest {
+         repository.setRepoEnabled(1, true)
+         repository.setRepoEnabled(2, true)
+         assertTrue(repository.isRepoEnabled(1))
+@@ -95,7 +95,7 @@ class PreferenceSettingsRepositoryTest {
+     }
+ 
+     @Test
+-    fun `getEnabledRepoIds emits updated ids`() = runTest {
++    fun `getEnabledRepoIds emits updated ids`() = testScope.runTest {
+         repository.setRepoEnabled(5, true)
+         repository.setRepoEnabled(10, true)
+ 
+@@ -108,28 +108,28 @@ class PreferenceSettingsRepositoryTest {
+     }
+ 
+     @Test
+-    fun `setAutoSync updates auto sync setting`() = runTest {
++    fun `setAutoSync updates auto sync setting`() = testScope.runTest {
+         repository.setAutoSync(AutoSync.NEVER)
+         val settings = repository.getInitial()
+         assertEquals(AutoSync.NEVER, settings.autoSync)
+     }
+ 
+     @Test
+-    fun `setSortOrder updates sort order`() = runTest {
++    fun `setSortOrder updates sort order`() = testScope.runTest {
+         repository.setSortOrder(SortOrder.NAME)
+         val settings = repository.getInitial()
+         assertEquals(SortOrder.NAME, settings.sortOrder)
+     }
+ 
+     @Test
+-    fun `setHomeScreenSwiping updates swiping setting`() = runTest {
++    fun `setHomeScreenSwiping updates swiping setting`() = testScope.runTest {
+         repository.setHomeScreenSwiping(false)
+         val settings = repository.getInitial()
+         assertFalse(settings.homeScreenSwiping)
+     }
+ 
+     @Test
+-    fun `setDeleteApkOnInstall updates setting`() = runTest {
++    fun `setDeleteApkOnInstall updates setting`() = testScope.runTest {
+         repository.setDeleteApkOnInstall(true)
+         val settings = repository.getInitial()
+         assertTrue(settings.deleteApkOnInstall)
 diff --git a/app/src/test/kotlin/com/looker/droidify/update/ForegroundSyncTest.kt b/app/src/test/kotlin/com/looker/droidify/update/ForegroundSyncTest.kt
 new file mode 100644
 index 0000000..c9cc1ae
