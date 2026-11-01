@@ -19,7 +19,8 @@ PRIVATE_CONFIGS = {'deploy/android/runtime.json', 'deploy/android/ddns.json',
                    'deploy/android/Caddyfile', 'deploy/android/Caddyfile.tencent',
                    'deploy/android/maintenance-sshd.conf', '.env'}
 UPSTREAM_HOSTS = {'github.com', 'codeberg.org', 'f-droid.org',
-                  'fastapi.tiangolo.com', 'schemas.android.com', 'api.cloudflare.com'}
+                  'fastapi.tiangolo.com', 'schemas.android.com', 'api.cloudflare.com',
+                  'fsf.org', 'www.gnu.org'}
 DOC_NETWORKS = [ipaddress.ip_network(x) for x in
                 ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24')]
 NETWORK_BASES = {'10.0.0.0', '172.16.0.0', '192.168.0.0'}

@@ -53,6 +53,33 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  client:
+    name: Android client regression tests and release build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install client SDK components
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
+      - name: Prepare pinned client with public fix only
+        run: |
+          mkdir -p .local
+          python3 scripts/prepare_client.py > .local/client-source-path
+      - name: Test and build unsigned client without deployment configuration
+        run: |
+          read -r client_source < .local/client-source-path
+          cd "$client_source"
+          ./gradlew --no-daemon --no-configuration-cache --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            '-Dorg.gradle.jvmargs=-Xmx3g -XX:ActiveProcessorCount=4' \
+            :app:testDebugUnitTest :app:assembleRelease
+
   container:
     name: Compose validation and container build
     runs-on: ubuntu-24.04

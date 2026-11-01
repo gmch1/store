@@ -1,0 +1,855 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 3289446..59431c7 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -47,6 +47,14 @@
+ 
+         </receiver>
+ 
++        <receiver
++            android:name=".receivers.SelfUpdateReceiver"
++            android:exported="false">
++            <intent-filter>
++                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
++            </intent-filter>
++        </receiver>
++
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/app/src/main/kotlin/com/looker/droidify/Droidify.kt b/app/src/main/kotlin/com/looker/droidify/Droidify.kt
+index f7b7365..43fdad8 100644
+--- a/app/src/main/kotlin/com/looker/droidify/Droidify.kt
++++ b/app/src/main/kotlin/com/looker/droidify/Droidify.kt
+@@ -31,6 +31,7 @@ import com.looker.droidify.utility.common.cache.Cache
+ import com.looker.droidify.utility.common.extension.getDrawableCompat
+ import com.looker.droidify.utility.common.extension.getInstalledPackagesCompat
+ import com.looker.droidify.utility.extension.toInstalledItem
++import com.looker.droidify.update.UpdateNotifications
+ import com.looker.droidify.work.CleanUpWorker
+ import dagger.hilt.android.HiltAndroidApp
+ import okhttp3.OkHttpClient
+@@ -65,6 +66,9 @@ class Droidify : Application(), SingletonImageLoader.Factory, Configuration.Prov
+     @Inject
+     lateinit var workerFactory: HiltWorkerFactory
+ 
++    @Inject
++    lateinit var updateNotifications: UpdateNotifications
++
+     override fun onCreate() {
+         super.onCreate()
+ 
+@@ -75,6 +79,7 @@ class Droidify : Application(), SingletonImageLoader.Factory, Configuration.Prov
+         checkLanguage()
+         updatePreference()
+         appScope.launch { installer() }
++        appScope.launch { updateNotifications.observe() }
+         if (databaseUpdated) {
+             appScope.launch {
+                 SyncService.forceSyncAll(applicationContext)
+@@ -83,22 +88,20 @@ class Droidify : Application(), SingletonImageLoader.Factory, Configuration.Prov
+     }
+ 
+     private fun listenApplications() {
++        registerReceiver(
++            InstalledAppReceiver(packageManager),
++            IntentFilter().apply {
++                addAction(Intent.ACTION_PACKAGE_ADDED)
++                addAction(Intent.ACTION_PACKAGE_REMOVED)
++                addDataScheme("package")
++            },
++        )
+         val installedItems = packageManager
+             .getInstalledPackagesCompat()
+             ?.map { it.toInstalledItem() }
+         if (installedItems != null) {
+             Database.InstalledAdapter.putAll(installedItems)
+         }
+-        appScope.launch {
+-            registerReceiver(
+-                InstalledAppReceiver(packageManager),
+-                IntentFilter().apply {
+-                    addAction(Intent.ACTION_PACKAGE_ADDED)
+-                    addAction(Intent.ACTION_PACKAGE_REMOVED)
+-                    addDataScheme("package")
+-                },
+-            )
+-        }
+     }
+ 
+     private fun checkLanguage() {
+diff --git a/app/src/main/kotlin/com/looker/droidify/MainActivity.kt b/app/src/main/kotlin/com/looker/droidify/MainActivity.kt
+index 909ccc3..076bfc4 100644
+--- a/app/src/main/kotlin/com/looker/droidify/MainActivity.kt
++++ b/app/src/main/kotlin/com/looker/droidify/MainActivity.kt
+@@ -32,6 +32,7 @@ import com.looker.droidify.ui.repository.RepositoriesFragment
+ import com.looker.droidify.ui.repository.RepositoryFragment
+ import com.looker.droidify.ui.settings.SettingsFragment
+ import com.looker.droidify.ui.tabsFragment.TabsFragment
++import com.looker.droidify.update.ForegroundSync
+ import com.looker.droidify.utility.common.DeeplinkType
+ import com.looker.droidify.utility.common.SdkCheck
+ import com.looker.droidify.utility.common.deeplinkType
+@@ -68,6 +69,9 @@ class MainActivity : AppCompatActivity() {
+     @Inject
+     lateinit var installer: InstallManager
+ 
++    @Inject
++    lateinit var foregroundSync: ForegroundSync
++
+     @Parcelize
+     private class FragmentStackItem(
+         val className: String,
+@@ -175,6 +179,11 @@ class MainActivity : AppCompatActivity() {
+         backHandler()
+     }
+ 
++    override fun onStart() {
++        super.onStart()
++        lifecycleScope.launch { foregroundSync.syncIfStale() }
++    }
++
+     override fun onDestroy() {
+         super.onDestroy()
+         onBackPressedCallback = null
+diff --git a/app/src/main/kotlin/com/looker/droidify/installer/InstallManager.kt b/app/src/main/kotlin/com/looker/droidify/installer/InstallManager.kt
+index 022ed23..7a4e6ba 100644
+--- a/app/src/main/kotlin/com/looker/droidify/installer/InstallManager.kt
++++ b/app/src/main/kotlin/com/looker/droidify/installer/InstallManager.kt
+@@ -3,7 +3,6 @@ package com.looker.droidify.installer
+ import android.content.Context
+ import android.util.Log
+ import com.looker.droidify.data.model.PackageName
+-import com.looker.droidify.database.Database
+ import com.looker.droidify.datastore.SettingsRepository
+ import com.looker.droidify.datastore.get
+ import com.looker.droidify.datastore.model.InstallerType
+@@ -14,8 +13,6 @@ import com.looker.droidify.installer.installers.session.SessionInstaller
+ import com.looker.droidify.installer.installers.shizuku.ShizukuInstaller
+ import com.looker.droidify.installer.model.InstallItem
+ import com.looker.droidify.installer.model.InstallState
+-import com.looker.droidify.service.SyncService
+-import com.looker.droidify.utility.common.Constants
+ import com.looker.droidify.utility.common.cache.Cache
+ import com.looker.droidify.utility.common.extension.addAndCompute
+ import com.looker.droidify.utility.common.extension.filter
+@@ -24,7 +21,6 @@ import com.looker.droidify.utility.common.extension.updateAsMutable
+ import com.looker.droidify.utility.notifications.createInstallNotification
+ import com.looker.droidify.utility.notifications.installNotification
+ import com.looker.droidify.utility.notifications.removeInstallNotification
+-import com.looker.droidify.utility.notifications.updatesAvailableNotification
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.channels.Channel
+@@ -45,7 +41,6 @@ class InstallManager(
+ 
+     val state = MutableStateFlow<Map<PackageName, InstallState>>(emptyMap())
+ 
+-    private val skipSignature = settingsRepository.get { ignoreSignature }
+     private val installerPreference = settingsRepository.get { installerType }
+     private val deleteApkPreference = settingsRepository.get { deleteApkOnInstall }
+     private val notificationManager by lazy { context.notificationManager }
+@@ -114,21 +109,6 @@ class InstallManager(
+                         apkFile.delete()
+                     }
+                 }
+-                if (result == InstallState.Installed && SyncService.autoUpdating) {
+-                    val updates = Database.ProductAdapter.getUpdates(skipSignature.first())
+-                    when {
+-                        updates.isEmpty() -> {
+-                            SyncService.autoUpdating = false
+-                            notificationManager?.cancel(Constants.NOTIFICATION_ID_UPDATES)
+-                        }
+-                        updates.map { it.packageName } != SyncService.autoUpdateStartedFor -> {
+-                            notificationManager?.notify(
+-                                Constants.NOTIFICATION_ID_UPDATES,
+-                                updatesAvailableNotification(context, updates),
+-                            )
+-                        }
+-                    }
+-                }
+                 notificationManager?.removeInstallNotification(item.packageName.name)
+                 updateState { put(item.packageName, result) }
+                 currentQueue.remove(item.packageName.name)
+diff --git a/app/src/main/kotlin/com/looker/droidify/receivers/InstalledAppReceiver.kt b/app/src/main/kotlin/com/looker/droidify/receivers/InstalledAppReceiver.kt
+index ba4ba79..e280d78 100644
+--- a/app/src/main/kotlin/com/looker/droidify/receivers/InstalledAppReceiver.kt
++++ b/app/src/main/kotlin/com/looker/droidify/receivers/InstalledAppReceiver.kt
+@@ -7,12 +7,18 @@ import android.content.pm.PackageManager
+ import com.looker.droidify.database.Database
+ import com.looker.droidify.utility.common.extension.getPackageInfoCompat
+ import com.looker.droidify.utility.extension.toInstalledItem
++import com.looker.droidify.utility.common.extension.notificationManager
++import com.looker.droidify.utility.notifications.removeInstallNotification
+ 
+ class InstalledAppReceiver(
+     private val packageManager: PackageManager,
+ ) : BroadcastReceiver() {
+ 
+     override fun onReceive(context: Context, intent: Intent) {
++        // A replacement emits REMOVED followed by ADDED; keep the old snapshot until ADDED.
++        if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
++            intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
++        ) return
+         val packageName =
+             intent.data?.let { if (it.scheme == "package") it.schemeSpecificPart else null }
+         if (packageName != null) {
+@@ -23,6 +29,9 @@ class InstalledAppReceiver(
+                     val packageInfo = packageManager.getPackageInfoCompat(packageName)
+                     if (packageInfo != null) {
+                         Database.InstalledAdapter.put(packageInfo.toInstalledItem())
++                        if (intent.action == Intent.ACTION_PACKAGE_ADDED) {
++                            context.notificationManager?.removeInstallNotification(packageName)
++                        }
+                     } else {
+                         Database.InstalledAdapter.delete(packageName)
+                     }
+diff --git a/app/src/main/kotlin/com/looker/droidify/receivers/SelfUpdateReceiver.kt b/app/src/main/kotlin/com/looker/droidify/receivers/SelfUpdateReceiver.kt
+new file mode 100644
+index 0000000..763777b
+--- /dev/null
++++ b/app/src/main/kotlin/com/looker/droidify/receivers/SelfUpdateReceiver.kt
+@@ -0,0 +1,33 @@
++package com.looker.droidify.receivers
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import com.looker.droidify.update.UpdateNotifications
++import com.looker.droidify.utility.notifications.removeInstallNotification
++import com.looker.droidify.utility.common.extension.notificationManager
++import dagger.hilt.android.AndroidEntryPoint
++import javax.inject.Inject
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++
++/** Self replacement kills the old process, including its dynamically registered package receiver. */
++@AndroidEntryPoint
++class SelfUpdateReceiver : BroadcastReceiver() {
++    @Inject lateinit var updateNotifications: UpdateNotifications
++
++    override fun onReceive(context: Context, intent: Intent) {
++        if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
++        context.notificationManager?.removeInstallNotification(context.packageName)
++        val pending = goAsync()
++        CoroutineScope(Dispatchers.IO).launch {
++            try {
++                // Application.onCreate has already rebuilt the installed-package snapshot.
++                updateNotifications.refresh()
++            } finally {
++                pending.finish()
++            }
++        }
++    }
++}
+diff --git a/app/src/main/kotlin/com/looker/droidify/service/Connection.kt b/app/src/main/kotlin/com/looker/droidify/service/Connection.kt
+index cd67c3a..0cc2c54 100644
+--- a/app/src/main/kotlin/com/looker/droidify/service/Connection.kt
++++ b/app/src/main/kotlin/com/looker/droidify/service/Connection.kt
+@@ -32,8 +32,8 @@ class Connection<B : IBinder, S : ConnectionService<B>>(
+         handleUnbind()
+     }
+ 
+-    fun bind(context: Context) {
+-        context.bindService(Intent(context, serviceClass), this, Context.BIND_AUTO_CREATE)
++    fun bind(context: Context): Boolean {
++        return context.bindService(Intent(context, serviceClass), this, Context.BIND_AUTO_CREATE)
+     }
+ 
+     fun unbind(context: Context) {
+diff --git a/app/src/main/kotlin/com/looker/droidify/service/SyncService.kt b/app/src/main/kotlin/com/looker/droidify/service/SyncService.kt
+index 95a2211..9c387e0 100644
+--- a/app/src/main/kotlin/com/looker/droidify/service/SyncService.kt
++++ b/app/src/main/kotlin/com/looker/droidify/service/SyncService.kt
+@@ -37,11 +37,10 @@ import com.looker.droidify.utility.common.extension.startServiceCompat
+ import com.looker.droidify.utility.common.extension.stopForegroundCompat
+ import com.looker.droidify.utility.common.result.Result
+ import com.looker.droidify.utility.extension.startUpdate
+-import com.looker.droidify.utility.notifications.updatesAvailableNotification
++import com.looker.droidify.update.UpdateNotifications
+ import com.looker.droidify.work.DownloadStatsWorker
+ import com.looker.droidify.work.RBLogWorker
+ import dagger.hilt.android.AndroidEntryPoint
+-import java.lang.ref.WeakReference
+ import javax.inject.Inject
+ import kotlin.math.roundToInt
+ import kotlin.time.Duration.Companion.hours
+@@ -79,9 +78,6 @@ class SyncService : ConnectionService<SyncService.Binder>() {
+ 
+         val syncState = MutableSharedFlow<State>()
+ 
+-        var autoUpdating = false
+-        var autoUpdateStartedFor: List<String> = emptyList()
+-
+         fun forceSyncAll(context: Context) {
+             Database.RepositoryAdapter.getAll().forEach {
+                 if (it.lastModified.isNotEmpty() || it.entityTag.isNotEmpty()) {
+@@ -101,6 +97,9 @@ class SyncService : ConnectionService<SyncService.Binder>() {
+     @Inject
+     lateinit var settingsRepository: SettingsRepository
+ 
++    @Inject
++    lateinit var updateNotifications: UpdateNotifications
++
+     sealed class State(val name: String) {
+         class Connecting(appName: String) : State(appName)
+ 
+@@ -141,8 +140,6 @@ class SyncService : ConnectionService<SyncService.Binder>() {
+     private val tasks = mutableListOf<Task>()
+     private var currentTask: CurrentTask? = null
+ 
+-    private var updateNotificationBlockerFragment: WeakReference<Fragment>? = null
+-
+     private val downloadConnection = Connection(DownloadService::class.java)
+     private val lock = Mutex()
+ 
+@@ -198,10 +195,7 @@ class SyncService : ConnectionService<SyncService.Binder>() {
+         }
+ 
+         fun setUpdateNotificationBlocker(fragment: Fragment?) {
+-            updateNotificationBlockerFragment = fragment?.let(::WeakReference)
+-            if (fragment != null) {
+-                notificationManager?.cancel(Constants.NOTIFICATION_ID_UPDATES)
+-            }
++            updateNotifications.setBlocker(fragment)
+         }
+ 
+         fun setEnabled(repository: Repository, enabled: Boolean): Boolean {
+@@ -588,25 +582,14 @@ class SyncService : ConnectionService<SyncService.Binder>() {
+ 
+     suspend fun handleUpdates(settings: Settings) {
+         try {
+-            val blocked = updateNotificationBlockerFragment?.get()?.isAdded == true
+-            val updates = Database.ProductAdapter.getUpdates(settings.ignoreSignature)
++            val updates = updateNotifications.refresh(allowNew = true)
+ 
+             val needStop = started == Started.MANUAL
+             started = Started.NO
+             if (needStop) stopForegroundCompat()
+ 
+-            if (!blocked && updates.isNotEmpty()) {
+-                if (settings.notifyUpdate) {
+-                    notificationManager?.notify(
+-                        Constants.NOTIFICATION_ID_UPDATES,
+-                        updatesAvailableNotification(this, updates),
+-                    )
+-                }
+-                if (settings.autoUpdate) {
+-                    autoUpdating = true
+-                    autoUpdateStartedFor = updates.map { it.packageName }
+-                    updateAllAppsInternal(updates)
+-                }
++            if (updates.isNotEmpty() && !updateNotifications.isBlocked() && settings.autoUpdate) {
++                updateAllAppsInternal(updates)
+             }
+ 
+             syncState.emit(State.Finish)
+diff --git a/app/src/main/kotlin/com/looker/droidify/ui/tabsFragment/TabsFragment.kt b/app/src/main/kotlin/com/looker/droidify/ui/tabsFragment/TabsFragment.kt
+index 7cd7b9e..dbc87bc 100644
+--- a/app/src/main/kotlin/com/looker/droidify/ui/tabsFragment/TabsFragment.kt
++++ b/app/src/main/kotlin/com/looker/droidify/ui/tabsFragment/TabsFragment.kt
+@@ -417,6 +417,7 @@ class TabsFragment : ScreenFragment() {
+         sectionsAdapter = null
+         viewPager = null
+ 
++        syncConnection.binder?.setUpdateNotificationBlocker(null)
+         syncConnection.unbind(requireContext())
+         sectionsAnimator?.cancel()
+         sectionsAnimator = null
+diff --git a/app/src/main/kotlin/com/looker/droidify/update/ForegroundSync.kt b/app/src/main/kotlin/com/looker/droidify/update/ForegroundSync.kt
+new file mode 100644
+index 0000000..9dbb7e6
+--- /dev/null
++++ b/app/src/main/kotlin/com/looker/droidify/update/ForegroundSync.kt
+@@ -0,0 +1,50 @@
++package com.looker.droidify.update
++
++import android.content.Context
++import android.net.ConnectivityManager
++import android.os.SystemClock
++import com.looker.droidify.database.Database
++import com.looker.droidify.service.Connection
++import com.looker.droidify.service.SyncService
++import dagger.hilt.android.qualifiers.ApplicationContext
++import javax.inject.Inject
++import javax.inject.Singleton
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlin.time.Duration.Companion.minutes
++
++/** Foreground checks use normal conditional HTTP requests, independently of background scheduling. */
++@Singleton
++class ForegroundSync @Inject constructor(
++    @ApplicationContext private val context: Context,
++) {
++    private val lock = Mutex()
++    private var lastAttempt: Long? = null
++
++    @Suppress("DEPRECATION")
++    suspend fun syncIfStale() = lock.withLock {
++        val network = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
++        if (network?.activeNetworkInfo?.isConnected != true) return@withLock
++        val elapsed = SystemClock.elapsedRealtime()
++        if (lastAttempt?.let { elapsed - it in 0 until INTERVAL } == true) return@withLock
++        val repos = Database.RepositoryAdapter.getAll().filter { it.enabled }
++        if (repos.isEmpty()) return@withLock
++        val now = System.currentTimeMillis()
++        if (repos.all { now - it.updated in 0 until INTERVAL }) return@withLock
++        val connection = Connection(
++            SyncService::class.java,
++            onBind = { connection, binder ->
++                try {
++                    binder.sync(SyncService.SyncRequest.MANUAL)
++                } finally {
++                    connection.unbind(context)
++                }
++            },
++        )
++        if (connection.bind(context)) lastAttempt = elapsed
++    }
++
++    companion object {
++        private val INTERVAL = 5.minutes.inWholeMilliseconds
++    }
++}
+diff --git a/app/src/main/kotlin/com/looker/droidify/update/UpdateNotifications.kt b/app/src/main/kotlin/com/looker/droidify/update/UpdateNotifications.kt
+new file mode 100644
+index 0000000..c108bca
+--- /dev/null
++++ b/app/src/main/kotlin/com/looker/droidify/update/UpdateNotifications.kt
+@@ -0,0 +1,68 @@
++package com.looker.droidify.update
++
++import android.content.Context
++import androidx.fragment.app.Fragment
++import com.looker.droidify.database.Database
++import com.looker.droidify.datastore.SettingsRepository
++import com.looker.droidify.datastore.get
++import com.looker.droidify.model.ProductItem
++import com.looker.droidify.utility.common.Constants
++import com.looker.droidify.utility.common.extension.notificationManager
++import com.looker.droidify.utility.notifications.updatesAvailableNotification
++import dagger.hilt.android.qualifiers.ApplicationContext
++import java.lang.ref.WeakReference
++import javax.inject.Inject
++import javax.inject.Singleton
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.flow.flatMapLatest
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++
++/** Keeps an existing update notification consistent with installed packages and repository data. */
++@Singleton
++class UpdateNotifications @Inject constructor(
++    @ApplicationContext private val context: Context,
++    private val settingsRepository: SettingsRepository,
++) {
++    private val refreshLock = Mutex()
++    private var blocker: WeakReference<Fragment>? = null
++
++    @OptIn(ExperimentalCoroutinesApi::class)
++    suspend fun observe() {
++        settingsRepository.get { ignoreSignature to notifyUpdate }
++            .flatMapLatest { (skipSignature, _) ->
++                Database.ProductAdapter.getUpdatesStream(skipSignature)
++            }
++            .collect { refresh() }
++    }
++
++    @Synchronized
++    fun setBlocker(fragment: Fragment?) {
++        blocker = fragment?.let(::WeakReference)
++        if (fragment != null) context.notificationManager?.cancel(Constants.NOTIFICATION_ID_UPDATES)
++    }
++
++    @Synchronized
++    fun isBlocked(): Boolean = blocker?.get()?.isAdded == true
++
++    suspend fun refresh(allowNew: Boolean = false): List<ProductItem> = refreshLock.withLock {
++        val settings = settingsRepository.getInitial()
++        // Query after acquiring the lock so an older result cannot overwrite a newer one.
++        val updates = Database.ProductAdapter.getUpdates(settings.ignoreSignature)
++        synchronized(this) {
++            val manager = context.notificationManager
++            val active = manager?.activeNotifications?.any {
++                it.id == Constants.NOTIFICATION_ID_UPDATES && it.tag == null
++            } == true
++            when {
++                updates.isEmpty() || !settings.notifyUpdate || isBlocked() ->
++                    manager?.cancel(Constants.NOTIFICATION_ID_UPDATES)
++                allowNew || active -> manager?.notify(
++                    Constants.NOTIFICATION_ID_UPDATES,
++                    updatesAvailableNotification(context, updates),
++                )
++            }
++        }
++        updates
++    }
++}
+diff --git a/app/src/main/kotlin/com/looker/droidify/utility/notifications/UpdateNotification.kt b/app/src/main/kotlin/com/looker/droidify/utility/notifications/UpdateNotification.kt
+index 7f236cf..542355c 100644
+--- a/app/src/main/kotlin/com/looker/droidify/utility/notifications/UpdateNotification.kt
++++ b/app/src/main/kotlin/com/looker/droidify/utility/notifications/UpdateNotification.kt
+@@ -21,6 +21,7 @@ fun updatesAvailableNotification(
+ ) = NotificationCompat
+     .Builder(context, Constants.NOTIFICATION_CHANNEL_UPDATES)
+     .setSmallIcon(R.drawable.ic_new_releases)
++    .setOnlyAlertOnce(true)
+     .setContentTitle(context.getString(R.string.new_updates_available))
+     .setContentText(
+         context.resources.getQuantityString(
+diff --git a/app/src/test/kotlin/com/looker/droidify/update/ForegroundSyncTest.kt b/app/src/test/kotlin/com/looker/droidify/update/ForegroundSyncTest.kt
+new file mode 100644
+index 0000000..c9cc1ae
+--- /dev/null
++++ b/app/src/test/kotlin/com/looker/droidify/update/ForegroundSyncTest.kt
+@@ -0,0 +1,100 @@
++package com.looker.droidify.update
++
++import android.app.Application
++import android.content.ComponentName
++import android.content.Intent
++import android.content.Context
++import android.content.ServiceConnection
++import android.net.ConnectivityManager
++import android.net.NetworkInfo
++import com.looker.droidify.database.Database
++import com.looker.droidify.model.Repository
++import com.looker.droidify.service.SyncService
++import io.mockk.*
++import java.time.Duration
++import kotlinx.coroutines.test.runTest
++import org.junit.After
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import org.robolectric.shadows.ShadowSystemClock
++
++@Suppress("DEPRECATION")
++@RunWith(RobolectricTestRunner::class)
++@Config(application = Application::class, manifest = Config.NONE, sdk = [35])
++class ForegroundSyncTest {
++    private lateinit var context: Context
++    private lateinit var networkInfo: NetworkInfo
++    private lateinit var sync: ForegroundSync
++    private val connection = slot<ServiceConnection>()
++    private var repos = emptyList<Repository>()
++
++    @Before
++    fun setUp() {
++        context = mockk(relaxed = true)
++        val connectivity = mockk<ConnectivityManager>()
++        networkInfo = mockk()
++        every { context.getSystemService(Context.CONNECTIVITY_SERVICE) } returns connectivity
++        every { connectivity.activeNetworkInfo } returns networkInfo
++        every { networkInfo.isConnected } returns true
++        every { context.bindService(any<Intent>(), capture(connection), any<Int>()) } returns true
++        mockkObject(Database.RepositoryAdapter)
++        every { Database.RepositoryAdapter.getAll() } answers { repos }
++        repos = listOf(repo())
++        sync = ForegroundSync(context)
++    }
++
++    @After
++    fun tearDown() = unmockkObject(Database.RepositoryAdapter)
++
++    @Test
++    fun openingAndReturningChecksOnceWithinFiveMinutesAndKeepsConditionalCaching() = runTest {
++        sync.syncIfStale()
++        val binder = mockk<SyncService.Binder>(relaxed = true)
++        connection.captured.onServiceConnected(ComponentName("com.example", "Sync"), binder)
++        verify { binder.sync(SyncService.SyncRequest.MANUAL) }
++        verify { context.unbindService(connection.captured) }
++        sync.syncIfStale()
++        verify(exactly = 1) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++        ShadowSystemClock.advanceBy(Duration.ofMinutes(5))
++        sync.syncIfStale()
++        verify(exactly = 2) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++        // FORCE would clear these HTTP validators; a foreground check must preserve them.
++        verify(exactly = 0) { Database.RepositoryAdapter.put(any(), any()) }
++    }
++
++    @Test
++    fun offlineEntryDoesNotConsumeNextForegroundAttempt() = runTest {
++        every { networkInfo.isConnected } returns false
++        sync.syncIfStale()
++        verify(exactly = 0) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++        every { networkInfo.isConnected } returns true
++        sync.syncIfStale()
++        verify(exactly = 1) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++    }
++
++    @Test
++    fun failedBindingCanRetryImmediately() = runTest {
++        every { context.bindService(any<Intent>(), capture(connection), any<Int>()) } returnsMany listOf(false, true)
++        sync.syncIfStale()
++        sync.syncIfStale()
++        verify(exactly = 2) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++    }
++
++    @Test
++    fun freshRepositoriesAndDisabledRepositoriesDoNotTriggerNetworkRequests() = runTest {
++        repos = listOf(repo().copy(updated = System.currentTimeMillis()), repo().copy(enabled = false))
++        sync.syncIfStale()
++        repos = repos.map { it.copy(enabled = false) }
++        sync.syncIfStale()
++        repos = emptyList()
++        sync.syncIfStale()
++        verify(exactly = 0) { context.bindService(any<Intent>(), any<ServiceConnection>(), any<Int>()) }
++    }
++
++    private fun repo() = Repository.newRepository("https://store.example.invalid/repo", "", "").copy(
++        id = 1, enabled = true, updated = 0, entityTag = "cached-index", lastModified = "cached-date",
++    )
++}
+diff --git a/app/src/test/kotlin/com/looker/droidify/update/InstalledAppReceiverTest.kt b/app/src/test/kotlin/com/looker/droidify/update/InstalledAppReceiverTest.kt
+new file mode 100644
+index 0000000..0693f53
+--- /dev/null
++++ b/app/src/test/kotlin/com/looker/droidify/update/InstalledAppReceiverTest.kt
+@@ -0,0 +1,81 @@
++package com.looker.droidify.update
++
++import android.app.Application
++import android.app.Notification
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.content.Context
++import android.content.Intent
++import android.content.pm.PackageInfo
++import android.net.Uri
++import androidx.test.core.app.ApplicationProvider
++import com.looker.droidify.database.Database
++import com.looker.droidify.receivers.InstalledAppReceiver
++import com.looker.droidify.utility.common.Constants
++import com.looker.droidify.utility.notifications.installNotification
++import io.mockk.*
++import org.junit.After
++import org.junit.Assert.assertTrue
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(application = Application::class, manifest = Config.NONE, sdk = [35])
++class InstalledAppReceiverTest {
++    private lateinit var context: Context
++    private lateinit var manager: NotificationManager
++    private lateinit var receiver: InstalledAppReceiver
++    private val packageName = "com.example.updated"
++
++    @Before
++    fun setUp() {
++        context = ApplicationProvider.getApplicationContext()
++        manager = context.getSystemService(NotificationManager::class.java)
++        manager.createNotificationChannel(NotificationChannel(
++            Constants.NOTIFICATION_CHANNEL_INSTALL, "Install", NotificationManager.IMPORTANCE_DEFAULT,
++        ))
++        manager.cancelAll()
++        mockkObject(Database.InstalledAdapter)
++        every { Database.InstalledAdapter.put(any()) } just Runs
++        every { Database.InstalledAdapter.delete(any()) } just Runs
++        receiver = InstalledAppReceiver(context.packageManager)
++    }
++
++    @After
++    fun tearDown() {
++        unmockkObject(Database.InstalledAdapter)
++        manager.cancelAll()
++    }
++
++    @Test
++    fun replacementRemovalDoesNotTemporarilyDeleteInstalledVersion() {
++        receiver.onReceive(context, Intent(Intent.ACTION_PACKAGE_REMOVED, Uri.parse("package:$packageName"))
++            .putExtra(Intent.EXTRA_REPLACING, true))
++        verify(exactly = 0) { Database.InstalledAdapter.delete(any()) }
++        verify(exactly = 0) { Database.InstalledAdapter.put(any()) }
++    }
++
++    @Test
++    fun successfulExternalOrLegacyInstallationUpdatesSnapshotAndClearsTapToInstall() {
++        shadowOf(context.packageManager).installPackage(PackageInfo().apply {
++            packageName = this@InstalledAppReceiverTest.packageName
++            versionName = "2.0"
++            longVersionCode = 2
++        })
++        manager.installNotification(packageName, Notification.Builder(context, Constants.NOTIFICATION_CHANNEL_INSTALL)
++            .setSmallIcon(android.R.drawable.ic_dialog_info).build())
++        receiver.onReceive(context, Intent(Intent.ACTION_PACKAGE_ADDED, Uri.parse("package:$packageName")))
++        verify { Database.InstalledAdapter.put(match { it.packageName == packageName && it.versionCode == 2L }) }
++        assertTrue(manager.activeNotifications.isEmpty())
++    }
++
++    @Test
++    fun genuineUninstallRemovesInstalledSnapshot() {
++        receiver.onReceive(context, Intent(Intent.ACTION_PACKAGE_REMOVED, Uri.parse("package:$packageName")))
++        verify { Database.InstalledAdapter.delete(packageName) }
++    }
++}
+diff --git a/app/src/test/kotlin/com/looker/droidify/update/UpdateNotificationsTest.kt b/app/src/test/kotlin/com/looker/droidify/update/UpdateNotificationsTest.kt
+new file mode 100644
+index 0000000..1bb675f
+--- /dev/null
++++ b/app/src/test/kotlin/com/looker/droidify/update/UpdateNotificationsTest.kt
+@@ -0,0 +1,155 @@
++package com.looker.droidify.update
++
++import android.app.Application
++import android.app.Notification
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import androidx.fragment.app.Fragment
++import com.looker.droidify.database.Database
++import com.looker.droidify.datastore.Settings
++import com.looker.droidify.datastore.SettingsRepository
++import com.looker.droidify.model.ProductItem
++import com.looker.droidify.utility.common.Constants
++import io.mockk.coEvery
++import io.mockk.every
++import io.mockk.mockk
++import io.mockk.mockkObject
++import io.mockk.unmockkObject
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.test.UnconfinedTestDispatcher
++import kotlinx.coroutines.test.runCurrent
++import kotlinx.coroutines.test.runTest
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++
++@OptIn(ExperimentalCoroutinesApi::class)
++@RunWith(RobolectricTestRunner::class)
++@Config(application = Application::class, sdk = [35])
++class UpdateNotificationsTest {
++    private lateinit var context: Context
++    private lateinit var manager: NotificationManager
++    private lateinit var notifier: UpdateNotifications
++    private val settings = MutableStateFlow(Settings())
++    private val updates = MutableStateFlow<List<ProductItem>>(emptyList())
++
++    @Before
++    fun setUp() {
++        context = ApplicationProvider.getApplicationContext()
++        manager = context.getSystemService(NotificationManager::class.java)
++        manager.createNotificationChannel(NotificationChannel(
++            Constants.NOTIFICATION_CHANNEL_UPDATES, "Updates", NotificationManager.IMPORTANCE_DEFAULT,
++        ))
++        manager.cancelAll()
++        val preferences = mockk<SettingsRepository>()
++        every { preferences.data } returns settings
++        coEvery { preferences.getInitial() } answers { settings.value }
++        mockkObject(Database.ProductAdapter)
++        coEvery { Database.ProductAdapter.getUpdates(any()) } answers { updates.value }
++        every { Database.ProductAdapter.getUpdatesStream(any()) } returns updates
++        notifier = UpdateNotifications(context, preferences)
++    }
++
++    @After
++    fun tearDown() {
++        manager.cancelAll()
++        unmockkObject(Database.ProductAdapter)
++    }
++
++    @Test
++    fun manualInstallationRefreshesRemainingAppsAndCancelsLastUpdate() = runTest {
++        updates.value = listOf(app("one"), app("two"))
++        notifier.refresh(allowNew = true)
++        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { notifier.observe() }
++
++        // This is the database change emitted by an install broadcast, with autoUpdate disabled.
++        updates.value = listOf(app("two"))
++        runCurrent()
++        val notification = active().single().notification
++        assertEquals(1, notification.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)!!.size)
++        assertTrue(notification.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)!![0].contains("two"))
++        assertTrue(notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
++
++        updates.value = emptyList()
++        runCurrent()
++        assertTrue(active().isEmpty())
++    }
++
++    @Test
++    fun startupRemovesStaleNotificationIncludingAfterSelfReplacement() = runTest {
++        updates.value = listOf(app("store"))
++        notifier.refresh(allowNew = true)
++        updates.value = emptyList()
++        // A new process starts with a fresh package snapshot and the previous OS notification.
++        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { notifier.observe() }
++        runCurrent()
++        assertTrue(active().isEmpty())
++    }
++
++    @Test
++    fun dismissedNotificationIsNotRecreatedByPackageChanges() = runTest {
++        updates.value = listOf(app("one"), app("two"))
++        notifier.refresh(allowNew = true)
++        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { notifier.observe() }
++        manager.cancel(Constants.NOTIFICATION_ID_UPDATES)
++        updates.value = listOf(app("two"))
++        runCurrent()
++        assertTrue(active().isEmpty())
++    }
++
++    @Test
++    fun disablingUpdateNotificationsCancelsExistingNotification() = runTest {
++        updates.value = listOf(app("one"))
++        notifier.refresh(allowNew = true)
++        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { notifier.observe() }
++        settings.value = settings.value.copy(notifyUpdate = false)
++        runCurrent()
++        assertTrue(active().isEmpty())
++        notifier.refresh(allowNew = true)
++        assertTrue(active().isEmpty())
++    }
++
++    @Test
++    fun updatesPageSuppressesNoticesUntilItIsLeft() = runTest {
++        updates.value = listOf(app("one"))
++        notifier.refresh(allowNew = true)
++        val fragment = mockk<Fragment>()
++        every { fragment.isAdded } returns true
++        notifier.setBlocker(fragment)
++        notifier.refresh(allowNew = true)
++        assertTrue(active().isEmpty())
++        notifier.setBlocker(null)
++        notifier.refresh(allowNew = true)
++        assertEquals(1, active().size)
++    }
++
++    @Test
++    fun syncWithNoUpdatesCancelsOldNoticeAndPreservesUnrelatedNotifications() = runTest {
++        updates.value = listOf(app("one"))
++        notifier.refresh(allowNew = true)
++        manager.notify(9876, Notification.Builder(context, Constants.NOTIFICATION_CHANNEL_UPDATES)
++            .setSmallIcon(android.R.drawable.ic_dialog_info).build())
++        updates.value = emptyList()
++        notifier.refresh(allowNew = true)
++        assertTrue(active().isEmpty())
++        assertEquals(9876, manager.activeNotifications.single().id)
++    }
++
++    private fun active() = manager.activeNotifications.filter {
++        it.id == Constants.NOTIFICATION_ID_UPDATES && it.tag == null
++    }
++
++    private fun app(name: String) = ProductItem(
++        repositoryId = 1, packageName = "com.example.$name", name = name, summary = "",
++        icon = "", metadataIcon = "", version = "2", installedVersion = "1",
++        compatible = true, canUpdate = true, matchRank = 0,
++    )
++}
