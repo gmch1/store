@@ -44,7 +44,8 @@ python3 scripts/upload.py /path/to/app-release.apk \
 - [Rooted Android 部署](docs/android-deployment.md)
 - [安全边界与公开范围](SECURITY.md)
 - [早期方案调研](docs/open-source-options.md)
-- [Android 客户端更新修复、构建与自更新](client/README.md)
+- [Android 客户端构建、配置与自更新](client/README.md)
+- [项目结构、代码归属与公开边界](docs/project-layout.md)
 
 ## 测试与 CI
 

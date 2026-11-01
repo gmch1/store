@@ -7,27 +7,6 @@ import pytest
 from scripts.prepare_client import archive_source, git, prepare
 
 
-@pytest.fixture
-def recipe(tmp_path):
-    upstream = tmp_path / "upstream"
-    upstream.mkdir()
-    subprocess.run(["git", "init", "-q", str(upstream)], check=True)
-    (upstream / "app").mkdir()
-    (upstream / "app/build.gradle.kts").write_text('defaultConfig {\n    versionName = "1.0.0"\n    versionCode = 1\n}\n')
-    (upstream / "app/Main.kt").write_text("val staleNotification = true\n")
-    (upstream / ".gitignore").write_text("build/\nlocal.properties\n*.key\n")
-    git(upstream, "add", ".")
-    git(upstream, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture")
-    commit = git(upstream, "rev-parse", "HEAD").decode().strip()
-    git(upstream, "tag", "vtest")
-    manifest = {"url": "https://github.com/Droid-ify/client.git", "tag": "vtest", "commit": commit}
-    (upstream / "app/Main.kt").write_text("val staleNotification = false\n")
-    patch = tmp_path / "fix.patch"
-    patch.write_bytes(git(upstream, "diff", "--binary"))
-    git(upstream, "restore", "app/Main.kt")
-    return upstream, manifest, patch, tmp_path / "prepared"
-
-
 def test_pinned_patch_and_version_override_are_repeatable(recipe):
     upstream, manifest, patch, destination = recipe
     options = dict(upstream=str(upstream), version_name="1.0.1", version_code=2)
@@ -36,6 +15,14 @@ def test_pinned_patch_and_version_override_are_repeatable(recipe):
     assert 'versionName = "1.0.1"' in (source / "app/build.gradle.kts").read_text()
     assert "versionCode = 2" in (source / "app/build.gradle.kts").read_text()
     assert prepare(manifest, [patch], destination, **options) == (source, expected)
+
+
+def test_application_identity_override_is_part_of_the_recipe(recipe):
+    upstream, manifest, patch, destination = recipe
+    source, _ = prepare(manifest, [patch], destination, upstream=str(upstream), application_id='com.example.client')
+    assert 'applicationId = "com.example.client"' in (source / 'app/build.gradle.kts').read_text()
+    other, _ = prepare(manifest, [patch], destination, upstream=str(upstream), application_id='com.example.other')
+    assert source != other
 
 
 @pytest.mark.parametrize("change", ["unstaged", "staged", "untracked"])

@@ -67,18 +67,8 @@ jobs:
           java-version: '21'
       - name: Install client SDK components
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
-      - name: Prepare pinned client with public fix only
-        run: |
-          mkdir -p .local
-          python3 scripts/prepare_client.py > .local/client-source-path
-      - name: Test and build unsigned client without deployment configuration
-        run: |
-          read -r client_source < .local/client-source-path
-          cd "$client_source"
-          ./gradlew --no-daemon --no-configuration-cache --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            '-Dorg.gradle.jvmargs=-Xmx3g -XX:ActiveProcessorCount=4' \
-            :app:testDebugUnitTest :app:assembleRelease
+      - name: Test and build client with synthetic configuration and no signing identity
+        run: python3 scripts/build_client.py --example-config --unsigned
       - name: Upload Android test reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
