@@ -15,6 +15,7 @@ def test_pinned_patch_and_version_override_are_repeatable(recipe):
     assert 'versionName = "1.0.1"' in (source / "app/build.gradle.kts").read_text()
     assert "versionCode = 2" in (source / "app/build.gradle.kts").read_text()
     assert prepare(manifest, [patch], destination, **options) == (source, expected)
+    assert git(source, 'remote', 'get-url', 'origin').decode().strip() == manifest['url']
 
 
 def test_application_identity_override_is_part_of_the_recipe(recipe):

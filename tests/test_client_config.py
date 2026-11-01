@@ -90,6 +90,15 @@ def test_generated_source_and_archive_contain_only_public_config(recipe, tmp_pat
     assert source != other
 
 
+def test_kotlin_configuration_preserves_literal_dollar_characters(recipe):
+    upstream, manifest, patch, destination = recipe
+    env = values()
+    env['STORE_CLIENT_REPO_URL'] = 'https://store.example.invalid/$release/repo'
+    source, _ = prepare(manifest, [patch], destination, upstream=str(upstream), config=public_config(env))
+    text = (source / 'app/src/main/kotlin/com/looker/droidify/StoreConfig.kt').read_text()
+    assert 'https://store.example.invalid/\\$release/repo' in text
+
+
 def test_signing_uses_existing_files_and_never_creates_an_identity(tmp_path):
     env = {'STORE_CLIENT_SIGNING_DIR': str(tmp_path), 'STORE_CLIENT_CERTIFICATE_SHA256': '12' * 32}
     with pytest.raises(ValueError, match='no new signing identity'):
