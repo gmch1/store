@@ -9,6 +9,8 @@
 # Optional loopback download entry for a client on the same device.
 http://127.0.0.1:8766 {
     bind 127.0.0.1
+    # Optional client-source hosting, after installing the matching example snippet.
+    # import /config/client-downloads.caddy
     @repo {
         method GET HEAD
         path /fdroid/repo/*
@@ -31,6 +33,8 @@ https://store.example.invalid {
         X-Content-Type-Options nosniff
         X-Robots-Tag "noindex, nofollow, noarchive"
     }
+    # Optional client-source hosting, after installing the matching example snippet.
+    # import /config/client-downloads.caddy
     @repo {
         method GET HEAD
         path /fdroid/repo/*
