@@ -1,0 +1,1130 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index f68d972..a863e24 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -18,10 +18,11 @@ android {
+     }
+ 
+     defaultConfig {
+-        applicationId = "com.looker.droidify"
++        applicationId = "xyz.ming.store"
+         minSdk = 23
+-        versionName = "0.7.8"
+-        versionCode = 780
++        targetSdk = 37
++        versionName = "1.0.1"
++        versionCode = 2
+ 
+         testInstrumentationRunner = "com.looker.droidify.TestRunner"
+     }
+@@ -81,8 +82,7 @@ android {
+             isReturnDefaultValues = true
+             all {
+                 it.useJUnitPlatform()
+-                val processor = Runtime.getRuntime().availableProcessors() / 2
+-                if (processor > 1) it.maxParallelForks = processor
++                it.maxParallelForks = 2
+             }
+         }
+     }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 3289446..bc2fae0 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -177,7 +177,7 @@
+             android:name=".receivers.CopyErrorReceiver"
+             android:exported="false">
+             <intent-filter>
+-                <action android:name="com.looker.droidify.intent.action.COPY_ERROR" />
++                <action android:name="${applicationId}.intent.action.COPY_ERROR" />
+             </intent-filter>
+         </receiver>
+ 
+diff --git a/app/src/main/kotlin/com/looker/droidify/compose/settings/SettingsScreen.kt b/app/src/main/kotlin/com/looker/droidify/compose/settings/SettingsScreen.kt
+index bd3acbe..7df2d97 100644
+--- a/app/src/main/kotlin/com/looker/droidify/compose/settings/SettingsScreen.kt
++++ b/app/src/main/kotlin/com/looker/droidify/compose/settings/SettingsScreen.kt
+@@ -25,6 +25,7 @@ import androidx.core.net.toUri
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.looker.droidify.BuildConfig
+ import com.looker.droidify.R
++import com.looker.droidify.StoreConfig
+ import com.looker.droidify.compose.components.BackButton
+ import com.looker.droidify.compose.settings.SettingsViewModel.Companion.cleanUpIntervals
+ import com.looker.droidify.compose.settings.SettingsViewModel.Companion.localeCodesList
+@@ -49,8 +50,8 @@ import java.util.*
+ import kotlin.time.Duration
+ 
+ private const val BACKUP_MIME_TYPE = "application/json"
+-private const val SETTINGS_BACKUP_NAME = "droidify_settings"
+-private const val REPO_BACKUP_NAME = "droidify_repos"
++private const val SETTINGS_BACKUP_NAME = "ming_store_settings"
++private const val REPO_BACKUP_NAME = "ming_store_repos"
+ private const val CUSTOM_BUTTONS_BACKUP_NAME = "custom_buttons"
+ 
+ private const val FOXY_DROID_TITLE = "FoxyDroid"
+@@ -374,6 +375,14 @@ fun SettingsScreen(
+ 
+             item { SettingHeader(title = stringResource(R.string.credits)) }
+ 
++            item {
++                ActionSettingItem(
++                    title = DROID_IFY_TITLE,
++                    description = "0.7.8 · GPL-3.0-or-later",
++                    onClick = { context.openLink(DROID_IFY_URL) },
++                )
++            }
++
+             item {
+                 ActionSettingItem(
+                     title = stringResource(R.string.special_credits),
+@@ -389,9 +398,9 @@ fun SettingsScreen(
+                         .versionName!!
+                 }
+                 ActionSettingItem(
+-                    title = DROID_IFY_TITLE,
++                    title = stringResource(R.string.application_name),
+                     description = currentVersion,
+-                    onClick = { context.openLink(DROID_IFY_URL) },
++                    onClick = { context.openLink(StoreConfig.SOURCE_URL) },
+                 )
+             }
+         }
+diff --git a/app/src/main/kotlin/com/looker/droidify/database/table/DatabaseHelper.kt b/app/src/main/kotlin/com/looker/droidify/database/table/DatabaseHelper.kt
+index 31ff6cc..3058045 100644
+--- a/app/src/main/kotlin/com/looker/droidify/database/table/DatabaseHelper.kt
++++ b/app/src/main/kotlin/com/looker/droidify/database/table/DatabaseHelper.kt
+@@ -8,7 +8,6 @@ import com.looker.droidify.database.Database.RepositoryAdapter
+ import com.looker.droidify.database.Database.Schema
+ import com.looker.droidify.database.Database.jsonParse
+ import com.looker.droidify.database.Database.query
+-import com.looker.droidify.index.OemRepositoryParser
+ import com.looker.droidify.model.Repository
+ import com.looker.droidify.utility.common.extension.asSequence
+ import com.looker.droidify.utility.common.extension.firstOrNull
+@@ -31,16 +30,15 @@ class DatabaseHelper(context: Context) :
+         db.execSQL(Schema.Product.formatCreateTable(Schema.Product.name))
+         db.execSQL(Schema.Category.formatCreateTable(Schema.Category.name))
+ 
+-        // Add default repositories for new database
++        // Seed the private repository once; repository changes remain user-controlled.
++        // Do not import device/OEM repositories into this private-store client.
+         db.addDefaultRepositories()
+-        db.addOemRepositories()
+         this.created = true
+     }
+ 
+     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+         db.removeRepositories()
+         db.addNewlyAddedRepositories()
+-        db.addOemRepositories()
+         this.updated = true
+     }
+ 
+@@ -74,12 +72,6 @@ class DatabaseHelper(context: Context) :
+         )
+     }
+ 
+-    private fun SQLiteDatabase.addOemRepositories() {
+-        OemRepositoryParser
+-            .getSystemDefaultRepos()
+-            ?.forEach { repo -> RepositoryAdapter.put(repo, database = this) }
+-    }
+-
+     private fun SQLiteDatabase.addDefaultRepositories() {
+         (Repository.defaultRepositories + Repository.newRepos())
+             .sortedBy { it.name }
+diff --git a/app/src/main/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepository.kt b/app/src/main/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepository.kt
+index 02907e4..12960cd 100644
+--- a/app/src/main/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepository.kt
++++ b/app/src/main/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepository.kt
+@@ -250,8 +250,8 @@ class PreferenceSettingsRepository(
+         val enabledRepoIds =
+             preferences[ENABLED_REPO_IDS]?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+         val deleteApkOnInstall = preferences[DELETE_APK_ON_INSTALL] ?: false
+-        val downloadStatisticsEnabled = preferences[DOWNLOAD_STATISTICS_ENABLED] ?: true
+-        val reproducibilityLogsEnabled = preferences[REPRODUCIBILITY_LOGS_ENABLED] ?: true
++        val downloadStatisticsEnabled = preferences[DOWNLOAD_STATISTICS_ENABLED] ?: false
++        val reproducibilityLogsEnabled = preferences[REPRODUCIBILITY_LOGS_ENABLED] ?: false
+ 
+         return Settings(
+             language = language,
+diff --git a/app/src/main/kotlin/com/looker/droidify/datastore/Settings.kt b/app/src/main/kotlin/com/looker/droidify/datastore/Settings.kt
+index bcd3769..3f5b250 100644
+--- a/app/src/main/kotlin/com/looker/droidify/datastore/Settings.kt
++++ b/app/src/main/kotlin/com/looker/droidify/datastore/Settings.kt
+@@ -48,8 +48,8 @@ data class Settings(
+     val homeScreenSwiping: Boolean = true,
+     val enabledRepoIds: Set<Int> = emptySet(),
+     val deleteApkOnInstall: Boolean = false,
+-    val dlStatsEnabled: Boolean = true,
+-    val rbLogsEnabled: Boolean = true,
++    val dlStatsEnabled: Boolean = false,
++    val rbLogsEnabled: Boolean = false,
+ )
+ 
+ @OptIn(ExperimentalSerializationApi::class)
+diff --git a/app/src/main/kotlin/com/looker/droidify/model/Repository.kt b/app/src/main/kotlin/com/looker/droidify/model/Repository.kt
+index f8e72db..9eacec8 100644
+--- a/app/src/main/kotlin/com/looker/droidify/model/Repository.kt
++++ b/app/src/main/kotlin/com/looker/droidify/model/Repository.kt
+@@ -1,5 +1,6 @@
+ package com.looker.droidify.model
+ 
++import com.looker.droidify.StoreConfig
+ import java.net.URL
+ 
+ data class Repository(
+@@ -87,318 +88,15 @@ data class Repository(
+             )
+         }
+ 
++        // Seeded only when the application database is first created. User edits,
++        // disabled repositories and deletions are preserved on subsequent launches.
+         val defaultRepositories = listOf(
+             defaultRepository(
+-                address = "https://f-droid.org/repo",
+-                name = "F-Droid",
+-                description = "The official F-Droid Free Software repos" +
+-                    "itory. Everything in this repository is always buil" +
+-                    "t from the source code.",
++                address = StoreConfig.REPO_URL,
++                name = "Ming Store",
++                description = "Private application repository for Ming Store.",
+                 enabled = true,
+-                fingerprint = "43238D512C1E5EB2D6569F4A3AFBF5523418B82E0A3ED1552770ABB9A9C9CCAB",
+-            ),
+-            defaultRepository(
+-                address = "https://f-droid.org/archive",
+-                name = "F-Droid Archive",
+-                description = "The archive of the official F-Droid Free" +
+-                    " Software repository. Apps here are old and can co" +
+-                    "ntain known vulnerabilities and security issues!",
+-                fingerprint = "43238D512C1E5EB2D6569F4A3AFBF5523418B82E0A3ED1552770ABB9A9C9CCAB",
+-            ),
+-            defaultRepository(
+-                address = "https://guardianproject.info/fdroid/repo",
+-                name = "Guardian Project official releases",
+-                description = "The official repository of The Guardian " +
+-                    "Project apps for use with the F-Droid client. Appl" +
+-                    "ications in this repository are official binaries " +
+-                    "built by the original application developers and " +
+-                    "signed by the same key as the APKs that are relea" +
+-                    "sed in the Google Play Store.",
+-                fingerprint = "B7C2EEFD8DAC7806AF67DFCD92EB18126BC08312A7F2D6F3862E46013C7A6135",
+-            ),
+-            defaultRepository(
+-                address = "https://guardianproject.info/fdroid/archive",
+-                name = "Guardian Project Archive",
+-                description = "The official repository of The Guardian Pr" +
+-                    "oject apps for use with the F-Droid client. This con" +
+-                    "tains older versions of applications from the main repository.",
+-                fingerprint = "B7C2EEFD8DAC7806AF67DFCD92EB18126BC08312A7F2D6F3862E46013C7A6135",
+-            ),
+-            defaultRepository(
+-                address = "https://apt.izzysoft.de/fdroid/repo",
+-                name = "IzzyOnDroid F-Droid repository",
+-                description = "This is a repository of apps to be used with" +
+-                    " F-Droid the original application developers, taken" +
+-                    " from the responsible repositories. At thi" +
+-                    "s moment I cannot give guarantees on regular updates" +
+-                    " for all of them, though most are checked multiple times a week.",
+-                enabled = true,
+-                fingerprint = "3BF0D6ABFEAE2F401707B6D966BE743BF0EEE49C2561B9BA39073711F628937A",
+-            ),
+-            defaultRepository(
+-                address = "https://microg.org/fdroid/repo",
+-                name = "microG Project",
+-                description = "The official repository for microG." +
+-                    " microG is a lightweight open source implementation" +
+-                    " of Google Play Services.",
+-                fingerprint = "9BD06727E62796C0130EB6DAB39B73157451582CBD138E86C468ACC395D14165",
+-            ),
+-            defaultRepository(
+-                address = "https://repo.netsyms.com/fdroid/repo",
+-                name = "Netsyms Technologies",
+-                description = "Official collection of open-source apps created" +
+-                    " by Netsyms Technologies.",
+-                fingerprint = "2581BA7B32D3AB443180C4087CAB6A7E8FB258D3A6E98870ECB3C675E4D64489",
+-            ),
+-            defaultRepository(
+-                address = "https://molly.im/fdroid/foss/fdroid/repo",
+-                name = "Molly",
+-                description = "The official repository for Molly. " +
+-                    "Molly is a fork of Signal focused on security.",
+-                fingerprint = "5198DAEF37FC23C14D5EE32305B2AF45787BD7DF2034DE33AD302BDB3446DF74",
+-            ),
+-            defaultRepository(
+-                address = "https://archive.newpipe.net/fdroid/repo",
+-                name = "NewPipe",
+-                description = "The official repository for NewPipe." +
+-                    " NewPipe is a lightweight client for YouTube, PeerTube" +
+-                    ", Soundcloud, etc.",
+-                fingerprint = "E2402C78F9B97C6C89E97DB914A2751FDA1D02FE2039CC0897A462BDB57E7501",
+-            ),
+-            defaultRepository(
+-                address = "https://www.collaboraoffice.com/downloads/fdroid/repo",
+-                name = "Collabora Office",
+-                description = "Collabora Office is an office suite based on LibreOffice.",
+-                fingerprint = "573258C84E149B5F4D9299E7434B2B69A8410372921D4AE586BA91EC767892CC",
+-            ),
+-            defaultRepository(
+-                address = "https://cdn.kde.org/android/fdroid/repo",
+-                name = "KDE Android",
+-                description = "The official nightly repository for KDE Android apps.",
+-                fingerprint = "B3EBE10AFA6C5C400379B34473E843D686C61AE6AD33F423C98AF903F056523F",
+-            ),
+-            defaultRepository(
+-                address = "https://calyxos.gitlab.io/calyx-fdroid-repo/fdroid/repo",
+-                name = "CalyxOS repository",
+-                description = "The official Calyx Labs F-Droid repository.",
+-                fingerprint = "C44D58B4547DE5096138CB0B34A1CC99DAB3B4274412ED753FCCBFC11DC1B7B6",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.fedilab.app/repo",
+-                name = "Fedilab",
+-                description = "The official repository for Fedilab. Fedilab is a " +
+-                    "multi-accounts client for Mastodon, PeerTube, and other free" +
+-                    " software social networks.",
+-                fingerprint = "11F0A69910A4280E2CD3CCC3146337D006BE539B18E1A9FEACE15FF757A94FEB",
+-            ),
+-            defaultRepository(
+-                address = "https://store.nethunter.com/repo",
+-                name = "Kali Nethunter",
+-                description = "Kali Nethunter's official selection of original b" +
+-                    "inaries.",
+-                fingerprint = "FE7A23DFC003A1CF2D2ADD2469B9C0C49B206BA5DC9EDD6563B3B7EB6A8F5FAB",
+-            ),
+-            defaultRepository(
+-                address = "https://thecapslock.gitlab.io/fdroid-patched-apps/fdroid/repo",
+-                name = "Patched Apps",
+-                description = "A collection of patched applications to provid" +
+-                    "e better compatibility, privacy etc.",
+-                fingerprint = "313D9E6E789FF4E8E2D687AAE31EEF576050003ED67963301821AC6D3763E3AC",
+-            ),
+-            defaultRepository(
+-                address = "https://mobileapp.bitwarden.com/fdroid/repo",
+-                name = "Bitwarden",
+-                description = "The official repository for Bitwarden. Bitward" +
+-                    "en is a password manager.",
+-                fingerprint = "BC54EA6FD1CD5175BCCCC47C561C5726E1C3ED7E686B6DB4B18BAC843A3EFE6C",
+-            ),
+-            defaultRepository(
+-                address = "https://briarproject.org/fdroid/repo",
+-                name = "Briar",
+-                description = "The official repository for Briar. Briar is a" +
+-                    " serverless/offline messenger that focused on privacy, s" +
+-                    "ecurity, and decentralization.",
+-                fingerprint = "1FB874BEE7276D28ECB2C9B06E8A122EC4BCB4008161436CE474C257CBF49BD6",
+-            ),
+-            defaultRepository(
+-                address = "https://guardianproject-wind.s3.amazonaws.com/fdroid/repo",
+-                name = "Wind Project",
+-                description = "A collection of interesting offline/serverless apps.",
+-                fingerprint = "182CF464D219D340DA443C62155198E399FEC1BC4379309B775DD9FC97ED97E1",
+-            ),
+-            defaultRepository(
+-                address = "https://nanolx.org/fdroid/repo",
+-                name = "NanoDroid",
+-                description = "A companion repository to microG's installer.",
+-                fingerprint = "862ED9F13A3981432BF86FE93D14596B381D75BE83A1D616E2D44A12654AD015",
+-            ),
+-            defaultRepository(
+-                address = "https://releases.threema.ch/fdroid/repo",
+-                name = "Threema Libre",
+-                description = "The official repository for Threema Libre. R" +
+-                    "equires Threema Shop license. Threema Libre is an open" +
+-                    "source messenger focused on security and privacy.",
+-                fingerprint = "5734E753899B25775D90FE85362A49866E05AC4F83C05BEF5A92880D2910639E",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.getsession.org/fdroid/repo",
+-                name = "Session",
+-                description = "The official repository for Session. Session" +
+-                    " is an open source messenger focused on security and privacy.",
+-                fingerprint = "DB0E5297EB65CC22D6BD93C869943BDCFCB6A07DC69A48A0DD8C7BA698EC04E6",
+-            ),
+-            defaultRepository(
+-                address = "https://www.cromite.org/fdroid/repo",
+-                name = "Cromite",
+-                description = "The official repository for Cromite. Cromite" +
+-                    " is a Chromium with ad blocking and enhanced privacy.",
+-                fingerprint = "49F37E74DEE483DCA2B991334FB5A0200787430D0B5F9A783DD5F13695E9517B",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.twinhelix.com/fdroid/repo",
+-                name = "TwinHelix",
+-                description = "TwinHelix F-Droid Repository, used for Signa" +
+-                    "l-FOSS, an open-source fork of Signal Private Messenger.",
+-                fingerprint = "7b03b0232209b21b10a30a63897d3c6bca4f58fe29bc3477e8e3d8cf8e304028",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.typeblog.net",
+-                name = "PeterCxy's F-Droid",
+-                description = "You have landed on PeterCxy's F-Droid repo. T" +
+-                    "o use this repository, please add the page's URL to your F-Droid client.",
+-                fingerprint = "1a7e446c491c80bc2f83844a26387887990f97f2f379ae7b109679feae3dbc8c",
+-            ),
+-            defaultRepository(
+-                address = "https://s2.spiritcroc.de/fdroid/repo",
+-                name = "SpiritCroc.de",
+-                description = "While some of my apps are available from" +
+-                    " the official F-Droid repository, I also maintain my" +
+-                    " own repository for a small selection of apps. These" +
+-                    " might be forks of other apps with only minor change" +
+-                    "s, or apps that are not published on the Play Store f" +
+-                    "or other reasons. In contrast to the official F-Droid" +
+-                    " repos, these might also include proprietary librarie" +
+-                    "s, e.g. for push notifications.",
+-                fingerprint = "6612ade7e93174a589cf5ba26ed3ab28231a789640546c8f30375ef045bc9242",
+-            ),
+-            defaultRepository(
+-                address = "https://s2.spiritcroc.de/testing/fdroid/repo",
+-                name = "SpiritCroc.de test builds",
+-                description = "SpiritCroc.de test builds",
+-                fingerprint = "52d03f2fab785573bb295c7ab270695e3a1bdd2adc6a6de8713250b33f231225",
+-            ),
+-            defaultRepository(
+-                address = "https://static.cryptomator.org/android/fdroid/repo",
+-                name = "Cryptomator",
+-                description = "No description.",
+-                fingerprint = "f7c3ec3b0d588d3cb52983e9eb1a7421c93d4339a286398e71d7b651e8d8ecdd",
+-            ),
+-            defaultRepository(
+-                address = "https://cdn.kde.org/android/stable-releases/fdroid/repo",
+-                name = "KDE Stables",
+-                description = "This repository contains unofficial builds of open source apps" +
+-                    " that are not included in the other repositories.",
+-                fingerprint = "13784ba6c80ff4e2181e55c56f961eed5844cea16870d3b38d58780b85e1158f",
+-            ),
+-            defaultRepository(
+-                address = "https://zimbelstern.eu/fdroid/repo",
+-                name = "Zimbelstern's F-Droid repository",
+-                description = "This is the official repository of apps from zimbelstern.eu," +
+-                    " to be used with F-Droid.",
+-                fingerprint = "285158DECEF37CB8DE7C5AF14818ACBF4A9B1FBE63116758EFC267F971CA23AA",
+-            ),
+-            defaultRepository(
+-                address = "https://app.simplex.chat/fdroid/repo",
+-                name = "SimpleX Chat",
+-                description = "SimpleX Chat official F-Droid repository.",
+-                fingerprint = "9F358FF284D1F71656A2BFAF0E005DEAE6AA14143720E089F11FF2DDCFEB01BA",
+-            ),
+-            defaultRepository(
+-                address = "https://f-droid.monerujo.io/fdroid/repo",
+-                name = "Monerujo Wallet",
+-                description = "Monerujo Monero Wallet official F-Droid repository.",
+-                fingerprint = "A82C68E14AF0AA6A2EC20E6B272EFF25E5A038F3F65884316E0F5E0D91E7B713",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.cakelabs.com/fdroid/repo",
+-                name = "Cake Labs",
+-                description = "Cake Labs official F-Droid repository for Cake Wallet and Monero.com.",
+-                fingerprint = "EA44EFAEE0B641EE7A032D397D5D976F9C4E5E1ED26E11C75702D064E55F8755",
+-            ),
+-            defaultRepository(
+-                address = "https://app.futo.org/fdroid/repo",
+-                name = "FUTO",
+-                description = "FUTO official F-Droid repository.",
+-                fingerprint = "39D47869D29CBFCE4691D9F7E6946A7B6D7E6FF4883497E6E675744ECDFA6D6D",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.mm20.de/repo",
+-                name = "MM20 Apps",
+-                description = "Apps developed and distributed by MM20.",
+-                fingerprint = "156FBAB952F6996415F198F3F29628D24B30E725B0F07A2B49C3A9B5161EEE1A",
+-            ),
+-            defaultRepository(
+-                address = "https://breezy-weather.github.io/fdroid-repo/fdroid/repo",
+-                name = "Breezy Weather",
+-                description = "The F-Droid repository for Breezy Weather.",
+-                fingerprint = "3480A7BB2A296D8F98CB90D2309199B5B9519C1B31978DBCD877ADB102AF35EE",
+-            ),
+-            defaultRepository(
+-                address = "https://gh.artemchep.com/keyguard-repo-fdroid/repo",
+-                name = "Keyguard Project",
+-                description = "Mirrors artifacts available on https://github.com/AChep/keyguard-app/releases.",
+-                fingerprint = "03941CE79B081666609C8A48AB6E46774263F6FC0BBF1FA046CCFFC60EA643BC",
+-            ),
+-            defaultRepository(
+-                address = "https://f5a.torus.icu/fdroid/repo",
+-                name = "Fcitx5 for Android F-Droid Repo",
+-                description = "Out-of-tree fcitx5-android plugins.",
+-                fingerprint = "5D87CE1FAD3772425C2A7ED987A57595A20B07543B9595A7FD2CED25DFF3CF12",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.i2pd.xyz/fdroid/repo/",
+-                name = "PurpleI2P F-Droid repository",
+-                description = "This is a repository of PurpleI2P. It contains applications developed and supported by our team.",
+-                fingerprint = "2B9564B0895EEAC039E854C6B065291B01E6A9CA02939CEDD0D35CF44BEE78E0",
+-            ),
+-            defaultRepository(
+-                address = "https://fdroid.ironfoxoss.org/fdroid/repo",
+-                name = "IronFox",
+-                description = "The official repository for IronFox:" +
+-                    " A privacy and security-oriented Firefox-based browser for Android.",
+-                fingerprint = "C5E291B5A571F9C8CD9A9799C2C94E02EC9703948893F2CA756D67B94204F904",
+-            ),
+-            defaultRepository(
+-                address = "https://raw.githubusercontent.com/chrisgch/tca/master/fdroid/repo",
+-                name = "Total Commander",
+-                description = "The official repository for Total Commander",
+-                fingerprint = "3576596CECDD70488D61CFD90799A49B7FFD26A81A8FEF1BADEC88D069FA72C1",
+-            ),
+-            defaultRepository(
+-                address = "https://www.cromite.org/fdroid/repo",
+-                name = "Cromite",
+-                description = "The official repository for Cromite. " +
+-                    "Cromite is a Chromium fork based on Bromite with " +
+-                    "built-in support for ad blocking and an eye for privacy.",
+-                fingerprint = "49F37E74DEE483DCA2B991334FB5A0200787430D0B5F9A783DD5F13695E9517B",
+-            ),
+-            defaultRepository(
+-                address = "https://brave-browser-apk-release.s3.brave.com/fdroid/repo",
+-                name = "Brave Browser",
+-                description = "The official repository for Brave Stable releases.",
+-                fingerprint = "3C60DE135AA19EC949E998469C908F7171885C1E2805F39EB403DDB0F37B4BD2",
+-            ),
+-            defaultRepository(
+-                address = "https://brave-browser-apk-beta.s3.brave.com/fdroid/repo",
+-                name = "Brave Browser Beta",
+-                description = "The official repository for Brave Beta releases. ",
+-                fingerprint = "C4675F87E60D58CECBECD884E43C4A089F2A3FDF58CAF823609B809AC1F90FAE",
+-            ),
+-            defaultRepository(
+-                address = "https://brave-browser-apk-nightly.s3.brave.com/fdroid/repo",
+-                name = "Brave Browser Nightly",
+-                description = "The official repository for Brave Nightly releases. ",
+-                fingerprint = "1735E2323FDE104A74F16D31C062DF75C30E79A706292FABEA1F94E6AF06EE62",
++                fingerprint = StoreConfig.REPO_FINGERPRINT,
+             ),
+         )
+ 
+diff --git a/app/src/main/kotlin/com/looker/droidify/receivers/CopyErrorReceiver.kt b/app/src/main/kotlin/com/looker/droidify/receivers/CopyErrorReceiver.kt
+index 9683898..726cf36 100644
+--- a/app/src/main/kotlin/com/looker/droidify/receivers/CopyErrorReceiver.kt
++++ b/app/src/main/kotlin/com/looker/droidify/receivers/CopyErrorReceiver.kt
+@@ -3,13 +3,14 @@ package com.looker.droidify.receivers
+ import android.content.BroadcastReceiver
+ import android.content.Context
+ import android.content.Intent
++import com.looker.droidify.BuildConfig
+ import com.looker.droidify.utility.common.extension.copyToClipboard
+ import com.looker.droidify.utility.common.extension.notificationManager
+ 
+ class CopyErrorReceiver : BroadcastReceiver() {
+ 
+     companion object {
+-        const val ACTION_COPY_ERROR = "com.looker.droidify.intent.action.COPY_ERROR"
++        const val ACTION_COPY_ERROR = BuildConfig.APPLICATION_ID + ".intent.action.COPY_ERROR"
+         const val EXTRA_ERROR_DETAILS = "error_details"
+         const val EXTRA_NOTIFICATION_TAG = "notification_tag"
+         const val EXTRA_NOTIFICATION_ID = "notification_id"
+diff --git a/app/src/main/res/drawable/ic_launcher_foreground.xml b/app/src/main/res/drawable/ic_launcher_foreground.xml
+index ae4f8e1..54eabd7 100644
+--- a/app/src/main/res/drawable/ic_launcher_foreground.xml
++++ b/app/src/main/res/drawable/ic_launcher_foreground.xml
+@@ -1,53 +1,6 @@
+-<vector xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:width="108dp"
+-    android:height="108dp"
+-    android:viewportWidth="108"
+-    android:viewportHeight="108">
+-  <group android:scaleX="0.7087745"
+-      android:scaleY="0.7087745"
+-      android:translateX="20.057142"
+-      android:translateY="20.37143">
+-    <path
+-        android:pathData="m28.56,57.594a22.542,22.542 0,0 1,4.775 -28.811,22.542 22.542,0 0,1 29.204,0.079 22.542,22.542 0,0 1,4.618 28.837"
+-        android:strokeWidth="6.61447"
+-        android:fillColor="#00000000"
+-        android:strokeColor="#7ada9d"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-    <path
+-        android:pathData="m47.89,51.594c-1.387,0 -2.503,1.384 -2.503,3.102v11.899l-4.849,-4.849c-0.909,-0.909 -2.373,-0.909 -3.282,0l-0.257,0.257c-0.909,0.909 -0.909,2.373 0,3.282l9.173,9.173c0.466,0.466 1.078,0.692 1.686,0.681 0.011,0 0.022,0.002 0.033,0.002 0.011,0 0.022,-0.001 0.033,-0.002 0.608,0.012 1.22,-0.215 1.686,-0.681l9.173,-9.173c0.909,-0.909 0.909,-2.373 0,-3.282l-0.257,-0.257c-0.909,-0.909 -2.373,-0.909 -3.282,0l-4.849,4.849v-11.899c0,-1.719 -1.116,-3.102 -2.503,-3.102z"
+-        android:strokeWidth="5.40899"
+-        android:fillColor="#ffb780"
+-        android:strokeColor="#00000000"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-    <path
+-        android:pathData="M41.407,40.614m-2.249,0a2.249,2.249 0,1 1,4.498 0a2.249,2.249 0,1 1,-4.498 0"
+-        android:strokeWidth="5.42057"
+-        android:fillColor="#7ada9d"
+-        android:strokeColor="#00000000"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-    <path
+-        android:pathData="M55.166,40.614m-2.249,0a2.249,2.249 0,1 1,4.498 0a2.249,2.249 0,1 1,-4.498 0"
+-        android:strokeWidth="5.42057"
+-        android:fillColor="#7ada9d"
+-        android:strokeColor="#00000000"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-    <path
+-        android:pathData="M69.466,23.098L69.903,23.535A1.411,1.411 90,0 1,69.903 25.531L65.35,30.083A1.411,1.411 0,0 1,63.355 30.083L62.918,29.647A1.411,1.411 0,0 1,62.918 27.651L67.47,23.098A1.411,1.411 0,0 1,69.466 23.098z"
+-        android:strokeWidth="8.92799"
+-        android:fillColor="#7ada9d"
+-        android:strokeColor="#00000000"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-    <path
+-        android:pathData="M25.784,23.098L25.347,23.535A1.411,1.411 0,0 0,25.347 25.531L29.9,30.083A1.411,1.411 0,0 0,31.896 30.083L32.332,29.647A1.411,1.411 0,0 0,32.332 27.651L27.78,23.098A1.411,1.411 0,0 0,25.784 23.098z"
+-        android:strokeWidth="8.928"
+-        android:fillColor="#7ada9d"
+-        android:strokeColor="#00000000"
+-        android:fillAlpha="0.964706"
+-        android:strokeLineCap="round"/>
+-  </group>
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
++    <path android:fillColor="#7BE4CE" android:pathData="M34,38 L74,38 L79,78 Q79,81 75,81 L33,81 Q29,81 29,78 Z" />
++    <path android:fillColor="#00000000" android:strokeColor="#7BE4CE" android:strokeWidth="5" android:strokeLineCap="round" android:pathData="M43,39 L43,32 C43,18 65,18 65,32 L65,39" />
++    <path android:fillColor="#00000000" android:strokeColor="#103B38" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M41,68 L41,50 L54,63 L67,50 L67,68" />
+ </vector>
+diff --git a/app/src/main/res/drawable/ic_launcher_monochrome.xml b/app/src/main/res/drawable/ic_launcher_monochrome.xml
+index a443a3f..631f2c3 100644
+--- a/app/src/main/res/drawable/ic_launcher_monochrome.xml
++++ b/app/src/main/res/drawable/ic_launcher_monochrome.xml
+@@ -1,53 +1,5 @@
+-<vector xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:width="108dp"
+-    android:height="108dp"
+-    android:viewportWidth="108"
+-    android:viewportHeight="108">
+-    <group android:scaleX="0.7087745"
+-        android:scaleY="0.7087745"
+-        android:translateX="20.057142"
+-        android:translateY="20.37143">
+-        <path
+-            android:pathData="m28.56,57.594a22.542,22.542 0,0 1,4.775 -28.811,22.542 22.542,0 0,1 29.204,0.079 22.542,22.542 0,0 1,4.618 28.837"
+-            android:strokeWidth="6.61447"
+-            android:fillColor="#00000000"
+-            android:strokeColor="#FF000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-        <path
+-            android:pathData="m47.89,51.594c-1.387,0 -2.503,1.384 -2.503,3.102v11.899l-4.849,-4.849c-0.909,-0.909 -2.373,-0.909 -3.282,0l-0.257,0.257c-0.909,0.909 -0.909,2.373 0,3.282l9.173,9.173c0.466,0.466 1.078,0.692 1.686,0.681 0.011,0 0.022,0.002 0.033,0.002 0.011,0 0.022,-0.001 0.033,-0.002 0.608,0.012 1.22,-0.215 1.686,-0.681l9.173,-9.173c0.909,-0.909 0.909,-2.373 0,-3.282l-0.257,-0.257c-0.909,-0.909 -2.373,-0.909 -3.282,0l-4.849,4.849v-11.899c0,-1.719 -1.116,-3.102 -2.503,-3.102z"
+-            android:strokeWidth="5.40899"
+-            android:fillColor="#1B1B1B"
+-            android:strokeColor="#00000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-        <path
+-            android:pathData="M41.407,40.614m-2.249,0a2.249,2.249 0,1 1,4.498 0a2.249,2.249 0,1 1,-4.498 0"
+-            android:strokeWidth="5.42057"
+-            android:fillColor="#FF000000"
+-            android:strokeColor="#00000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-        <path
+-            android:pathData="M55.166,40.614m-2.249,0a2.249,2.249 0,1 1,4.498 0a2.249,2.249 0,1 1,-4.498 0"
+-            android:strokeWidth="5.42057"
+-            android:fillColor="#FF000000"
+-            android:strokeColor="#00000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-        <path
+-            android:pathData="M69.466,23.098L69.903,23.535A1.411,1.411 90,0 1,69.903 25.531L65.35,30.083A1.411,1.411 0,0 1,63.355 30.083L62.918,29.647A1.411,1.411 0,0 1,62.918 27.651L67.47,23.098A1.411,1.411 0,0 1,69.466 23.098z"
+-            android:strokeWidth="8.92799"
+-            android:fillColor="#FF000000"
+-            android:strokeColor="#00000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-        <path
+-            android:pathData="M25.784,23.098L25.347,23.535A1.411,1.411 0,0 0,25.347 25.531L29.9,30.083A1.411,1.411 0,0 0,31.896 30.083L32.332,29.647A1.411,1.411 0,0 0,32.332 27.651L27.78,23.098A1.411,1.411 0,0 0,25.784 23.098z"
+-            android:strokeWidth="8.928"
+-            android:fillColor="#FF000000"
+-            android:strokeColor="#00000000"
+-            android:fillAlpha="0.964706"
+-            android:strokeLineCap="round"/>
+-    </group>
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
++    <path android:fillColor="#FFFFFF" android:pathData="M34,38 L74,38 L79,78 Q79,81 75,81 L33,81 Q29,81 29,78 Z" />
++    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="5" android:strokeLineCap="round" android:pathData="M43,39 L43,32 C43,18 65,18 65,32 L65,39" />
+ </vector>
+diff --git a/app/src/main/res/drawable/tv_banner.xml b/app/src/main/res/drawable/tv_banner.xml
+index 94a3fed..62b99e0 100644
+--- a/app/src/main/res/drawable/tv_banner.xml
++++ b/app/src/main/res/drawable/tv_banner.xml
+@@ -1,209 +1,9 @@
+-<vector xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:width="1280dp"
+-    android:height="720dp"
+-    android:viewportWidth="338.67"
+-    android:viewportHeight="190.5">
+-  <path
+-      android:pathData="M0,-0h338.67v190.5h-338.67z"
+-      android:strokeWidth="8.92799"
+-      android:fillColor="#191c1a"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m48.46,108.65a30.37,30.37 0,0 1,6.43 -38.82,30.37 30.37,0 0,1 39.35,0.11 30.37,30.37 0,0 1,6.22 38.85"
+-      android:strokeWidth="8.91"
+-      android:fillColor="#00000000"
+-      android:strokeColor="#7ada9d"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m74.5,100.56c-1.87,0 -3.37,1.86 -3.37,4.18l0,16.03l-6.53,-6.53c-1.22,-1.22 -3.2,-1.22 -4.42,0l-0.35,0.35c-1.22,1.22 -1.22,3.2 0,4.42l12.36,12.36c0.63,0.63 1.45,0.93 2.27,0.92 0.01,0 0.03,0 0.04,0 0.01,0 0.03,-0 0.04,-0 0.82,0.02 1.64,-0.29 2.27,-0.92l12.36,-12.36c1.22,-1.22 1.22,-3.2 0,-4.42l-0.35,-0.35c-1.22,-1.22 -3.2,-1.22 -4.42,0l-6.53,6.53l0,-16.03c0,-2.32 -1.5,-4.18 -3.37,-4.18z"
+-      android:strokeWidth="7.29"
+-      android:fillColor="#ffb780"
+-      android:strokeColor="#00000000"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="M65.77,85.77m-3.03,0a3.03,3.03 0,1 1,6.06 0a3.03,3.03 0,1 1,-6.06 0"
+-      android:strokeWidth="7.3"
+-      android:fillColor="#7ada9d"
+-      android:strokeColor="#00000000"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="M84.31,85.77m-3.03,0a3.03,3.03 0,1 1,6.06 0a3.03,3.03 0,1 1,-6.06 0"
+-      android:strokeWidth="7.3"
+-      android:fillColor="#7ada9d"
+-      android:strokeColor="#00000000"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="M103.57,62.17L104.16,62.76A1.9,1.9 90,0 1,104.16 65.45L98.03,71.58A1.9,1.9 0,0 1,95.34 71.58L94.75,70.99A1.9,1.9 0,0 1,94.75 68.3L100.89,62.17A1.9,1.9 90,0 1,103.57 62.17z"
+-      android:strokeWidth="12.03"
+-      android:fillColor="#7ada9d"
+-      android:strokeColor="#00000000"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="M44.72,62.17L44.13,62.76A1.9,1.9 0,0 0,44.13 65.45L50.27,71.58A1.9,1.9 0,0 0,52.95 71.58L53.54,70.99A1.9,1.9 0,0 0,53.54 68.3L47.41,62.17A1.9,1.9 0,0 0,44.72 62.17z"
+-      android:strokeWidth="12.03"
+-      android:fillColor="#7ada9d"
+-      android:strokeColor="#00000000"
+-      android:fillAlpha="0.964706"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m198.8,86.86q0,1.96 -0.86,3.55 -0.85,1.59 -2.27,2.47 -0.98,0.61 -2.2,0.88 -1.21,0.27 -3.18,0.27h-3.63L186.67,79.66h3.59q2.1,0 3.34,0.31 1.24,0.3 2.1,0.83 1.47,0.92 2.29,2.44 0.82,1.52 0.82,3.62zM196.81,86.83q0,-1.69 -0.59,-2.85 -0.59,-1.16 -1.76,-1.82 -0.85,-0.48 -1.8,-0.67 -0.95,-0.19 -2.29,-0.19h-1.79v11.08h1.79q1.38,0 2.4,-0.2 1.03,-0.2 1.89,-0.75 1.07,-0.68 1.6,-1.8 0.54,-1.12 0.54,-2.8z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m208.47,85.23h-0.1q-0.41,-0.1 -0.79,-0.14 -0.38,-0.05 -0.9,-0.05 -0.84,0 -1.62,0.38 -0.78,0.37 -1.5,0.95v7.65h-1.81L201.75,83.25h1.81v1.59q1.08,-0.87 1.9,-1.23 0.83,-0.37 1.69,-0.37 0.47,0 0.68,0.03 0.21,0.02 0.64,0.09z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m219.36,88.64q0,2.63 -1.35,4.16 -1.35,1.52 -3.62,1.52 -2.29,0 -3.64,-1.52 -1.34,-1.52 -1.34,-4.16 0,-2.63 1.34,-4.16 1.35,-1.53 3.64,-1.53 2.27,0 3.62,1.53 1.35,1.52 1.35,4.16zM217.49,88.64q0,-2.09 -0.82,-3.11 -0.82,-1.02 -2.28,-1.02 -1.48,0 -2.3,1.02 -0.81,1.01 -0.81,3.11 0,2.03 0.82,3.08 0.82,1.04 2.29,1.04 1.45,0 2.27,-1.03 0.83,-1.04 0.83,-3.09z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m224.12,81.45h-2.05v-1.88h2.05zM224,94.02h-1.81L222.19,83.25h1.81z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m236.33,94.02h-1.81v-1.13q-0.78,0.68 -1.63,1.05 -0.85,0.38 -1.84,0.38 -1.93,0 -3.07,-1.49 -1.13,-1.49 -1.13,-4.12 0,-1.37 0.39,-2.44 0.4,-1.07 1.06,-1.82 0.66,-0.73 1.52,-1.12 0.88,-0.39 1.81,-0.39 0.85,0 1.5,0.18 0.66,0.17 1.38,0.55v-4.67h1.81zM234.52,91.37v-6.18q-0.73,-0.33 -1.31,-0.45 -0.58,-0.13 -1.26,-0.13 -1.52,0 -2.37,1.06 -0.85,1.06 -0.85,3.01 0,1.92 0.66,2.92 0.66,0.99 2.1,0.99 0.77,0 1.56,-0.34 0.79,-0.35 1.48,-0.89z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m245.61,88.61h-6.02v-1.75h6.02z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m250.82,81.45h-2.05v-1.88h2.05zM250.7,94.02h-1.81L248.89,83.25h1.81z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m260.09,80.77h-0.1q-0.3,-0.09 -0.78,-0.17 -0.48,-0.1 -0.85,-0.1 -1.17,0 -1.7,0.52 -0.52,0.51 -0.52,1.86v0.37h3.27v1.52h-3.21v9.25h-1.81v-9.25h-1.23v-1.52h1.23v-0.36q0,-1.92 0.95,-2.94 0.95,-1.03 2.76,-1.03 0.61,0 1.09,0.06 0.49,0.06 0.9,0.14z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m270.46,83.25 l-6.29,14.75h-1.94l2.01,-4.5 -4.29,-10.25h1.97l3.31,7.99 3.34,-7.99z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#7ada9d"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m168.32,111.41h-1.16l-0.8,-2.29h-3.55l-0.8,2.29h-1.11l2.99,-8.21h1.46zM166.01,108.19 L164.57,104.16 163.13,108.19z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m182.43,111.41h-1.04v-3.51q0,-0.4 -0.04,-0.77 -0.03,-0.37 -0.15,-0.59 -0.13,-0.24 -0.36,-0.36 -0.24,-0.12 -0.68,-0.12 -0.44,0 -0.87,0.22 -0.44,0.21 -0.87,0.55 0.02,0.13 0.03,0.3 0.01,0.17 0.01,0.33v3.94h-1.04v-3.51q0,-0.41 -0.04,-0.77 -0.03,-0.37 -0.15,-0.59 -0.13,-0.24 -0.36,-0.35 -0.24,-0.12 -0.68,-0.12 -0.42,0 -0.85,0.21 -0.42,0.21 -0.85,0.53v4.6h-1.04v-6.16h1.04v0.68q0.49,-0.4 0.96,-0.63 0.49,-0.23 1.03,-0.23 0.63,0 1.06,0.26 0.44,0.26 0.66,0.73 0.63,-0.53 1.15,-0.76 0.52,-0.24 1.11,-0.24 1.01,0 1.49,0.62 0.49,0.61 0.49,1.71z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m189.21,111.41h-1.03v-0.66q-0.14,0.09 -0.37,0.26 -0.23,0.17 -0.45,0.26 -0.26,0.13 -0.6,0.21 -0.34,0.09 -0.79,0.09 -0.83,0 -1.41,-0.55 -0.58,-0.55 -0.58,-1.41 0,-0.7 0.3,-1.13 0.3,-0.44 0.86,-0.68 0.56,-0.25 1.35,-0.34 0.79,-0.09 1.69,-0.13L188.18,107.18q0,-0.35 -0.13,-0.58 -0.12,-0.23 -0.35,-0.36 -0.22,-0.13 -0.53,-0.17 -0.31,-0.04 -0.64,-0.04 -0.41,0 -0.91,0.11 -0.5,0.1 -1.04,0.31h-0.06v-1.05q0.3,-0.08 0.88,-0.18 0.57,-0.1 1.13,-0.1 0.65,0 1.13,0.11 0.49,0.1 0.84,0.36 0.35,0.25 0.53,0.66 0.18,0.4 0.18,1zM188.18,109.9L188.18,108.18q-0.47,0.03 -1.12,0.08 -0.64,0.06 -1.01,0.16 -0.45,0.13 -0.72,0.4 -0.28,0.26 -0.28,0.73 0,0.53 0.32,0.8 0.32,0.26 0.98,0.26 0.55,0 1,-0.21 0.45,-0.21 0.84,-0.51z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m194.4,111.36q-0.29,0.08 -0.64,0.13 -0.34,0.05 -0.61,0.05 -0.94,0 -1.43,-0.51 -0.49,-0.51 -0.49,-1.63v-3.27h-0.7v-0.87h0.7v-1.77h1.04v1.77h2.14v0.87h-2.14v2.81q0,0.49 0.02,0.76 0.02,0.27 0.15,0.51 0.12,0.22 0.33,0.33 0.21,0.1 0.65,0.1 0.25,0 0.53,-0.07 0.28,-0.08 0.4,-0.13h0.06z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m200.81,108.44h-4.54q0,0.57 0.17,0.99 0.17,0.42 0.47,0.69 0.29,0.26 0.68,0.4 0.4,0.13 0.87,0.13 0.63,0 1.26,-0.25 0.64,-0.25 0.91,-0.5h0.06v1.13q-0.52,0.22 -1.07,0.37 -0.55,0.15 -1.15,0.15 -1.53,0 -2.39,-0.83 -0.86,-0.83 -0.86,-2.36 0,-1.51 0.82,-2.4 0.83,-0.89 2.17,-0.89 1.25,0 1.92,0.73 0.68,0.73 0.68,2.07zM199.8,107.65q-0.01,-0.82 -0.41,-1.26 -0.4,-0.45 -1.23,-0.45 -0.83,0 -1.33,0.49 -0.49,0.49 -0.56,1.22z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m206.22,106.38h-0.06q-0.23,-0.06 -0.45,-0.08 -0.21,-0.03 -0.51,-0.03 -0.48,0 -0.93,0.21 -0.45,0.21 -0.86,0.55v4.37h-1.04v-6.16h1.04v0.91q0.62,-0.5 1.09,-0.7 0.47,-0.21 0.96,-0.21 0.27,0 0.39,0.02 0.12,0.01 0.36,0.05z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m208.31,104.22h-1.17L207.14,103.15h1.17zM208.25,111.41h-1.04v-6.16h1.04z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m215.08,111.41h-1.03v-0.66q-0.14,0.09 -0.37,0.26 -0.23,0.17 -0.45,0.26 -0.26,0.13 -0.6,0.21 -0.34,0.09 -0.79,0.09 -0.83,0 -1.41,-0.55 -0.58,-0.55 -0.58,-1.41 0,-0.7 0.3,-1.13 0.3,-0.44 0.86,-0.68 0.56,-0.25 1.35,-0.34 0.79,-0.09 1.69,-0.13L214.05,107.18q0,-0.35 -0.13,-0.58 -0.12,-0.23 -0.35,-0.36 -0.22,-0.13 -0.53,-0.17 -0.31,-0.04 -0.64,-0.04 -0.41,0 -0.91,0.11 -0.5,0.1 -1.04,0.31h-0.06v-1.05q0.3,-0.08 0.88,-0.18 0.57,-0.1 1.13,-0.1 0.65,0 1.13,0.11 0.49,0.1 0.84,0.36 0.35,0.25 0.53,0.66 0.18,0.4 0.18,1zM214.05,109.9L214.05,108.18q-0.47,0.03 -1.12,0.08 -0.64,0.06 -1.01,0.16 -0.45,0.13 -0.72,0.4 -0.28,0.26 -0.28,0.73 0,0.53 0.32,0.8 0.32,0.26 0.98,0.26 0.55,0 1,-0.21 0.45,-0.21 0.84,-0.51z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m218.12,111.41h-1.04v-8.58h1.04z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m229.47,104.17h-4.15v2.32h3.57v0.97h-3.57v3.95h-1.09v-8.21h5.24z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m237.65,107.32q0,1.12 -0.49,2.03 -0.49,0.91 -1.3,1.41 -0.56,0.35 -1.26,0.5 -0.69,0.15 -1.82,0.15h-2.07v-8.21h2.05q1.2,0 1.91,0.18 0.71,0.17 1.2,0.47 0.84,0.52 1.31,1.39 0.47,0.87 0.47,2.07zM236.51,107.3q0,-0.96 -0.34,-1.63 -0.34,-0.66 -1,-1.04 -0.49,-0.28 -1.03,-0.38 -0.55,-0.11 -1.31,-0.11h-1.03v6.33h1.03q0.79,0 1.37,-0.12 0.59,-0.12 1.08,-0.43 0.61,-0.39 0.92,-1.03 0.31,-0.64 0.31,-1.6z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m243.17,106.38h-0.06q-0.23,-0.06 -0.45,-0.08 -0.21,-0.03 -0.51,-0.03 -0.48,0 -0.93,0.21 -0.45,0.21 -0.86,0.55v4.37h-1.04v-6.16h1.04v0.91q0.62,-0.5 1.09,-0.7 0.47,-0.21 0.96,-0.21 0.27,0 0.39,0.02 0.12,0.01 0.36,0.05z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m249.39,108.34q0,1.5 -0.77,2.38 -0.77,0.87 -2.07,0.87 -1.31,0 -2.08,-0.87 -0.77,-0.87 -0.77,-2.38 0,-1.5 0.77,-2.38 0.77,-0.88 2.08,-0.88 1.3,0 2.07,0.88 0.77,0.87 0.77,2.38zM248.32,108.34q0,-1.2 -0.47,-1.77 -0.47,-0.58 -1.3,-0.58 -0.84,0 -1.31,0.58 -0.46,0.58 -0.46,1.77 0,1.16 0.47,1.76 0.47,0.6 1.31,0.6 0.83,0 1.3,-0.59 0.47,-0.6 0.47,-1.76z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m252.11,104.22h-1.17L250.94,103.15h1.17zM252.05,111.41h-1.04v-6.16h1.04z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m259.09,111.41h-1.04v-0.64q-0.45,0.39 -0.93,0.6 -0.49,0.21 -1.05,0.21 -1.1,0 -1.75,-0.85 -0.64,-0.85 -0.64,-2.35 0,-0.78 0.22,-1.39 0.23,-0.61 0.61,-1.04 0.37,-0.42 0.87,-0.64 0.5,-0.22 1.04,-0.22 0.49,0 0.86,0.1 0.37,0.1 0.79,0.31v-2.67h1.04zM258.05,109.9v-3.53q-0.42,-0.19 -0.75,-0.26 -0.33,-0.07 -0.72,-0.07 -0.87,0 -1.36,0.61 -0.49,0.61 -0.49,1.72 0,1.1 0.37,1.67 0.37,0.57 1.2,0.57 0.44,0 0.89,-0.19 0.45,-0.2 0.84,-0.51z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m271.52,110.82q-0.3,0.13 -0.55,0.25 -0.24,0.12 -0.64,0.24 -0.34,0.1 -0.73,0.18 -0.39,0.08 -0.87,0.08 -0.89,0 -1.63,-0.25 -0.73,-0.25 -1.27,-0.79 -0.53,-0.52 -0.83,-1.33 -0.3,-0.81 -0.3,-1.88 0,-1.01 0.29,-1.81 0.29,-0.8 0.83,-1.35 0.52,-0.53 1.26,-0.82 0.74,-0.28 1.65,-0.28 0.66,0 1.32,0.16 0.66,0.16 1.47,0.56v1.3h-0.08q-0.68,-0.57 -1.34,-0.83 -0.67,-0.26 -1.43,-0.26 -0.62,0 -1.12,0.2 -0.5,0.2 -0.89,0.62 -0.38,0.41 -0.6,1.05 -0.21,0.63 -0.21,1.46 0,0.87 0.23,1.49 0.24,0.62 0.61,1.01 0.39,0.41 0.9,0.61 0.52,0.19 1.09,0.19 0.79,0 1.48,-0.27 0.69,-0.27 1.29,-0.81h0.08z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m274.03,111.41h-1.04v-8.58h1.04z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m277.19,104.22h-1.17L276.02,103.15h1.17zM277.13,111.41h-1.04v-6.16h1.04z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m284.33,108.44h-4.54q0,0.57 0.17,0.99 0.17,0.42 0.47,0.69 0.29,0.26 0.68,0.4 0.4,0.13 0.87,0.13 0.63,0 1.26,-0.25 0.64,-0.25 0.91,-0.5h0.06v1.13q-0.52,0.22 -1.07,0.37 -0.55,0.15 -1.15,0.15 -1.53,0 -2.39,-0.83 -0.86,-0.83 -0.86,-2.36 0,-1.51 0.82,-2.4 0.83,-0.89 2.17,-0.89 1.25,0 1.92,0.73 0.68,0.73 0.68,2.07zM283.32,107.65q-0.01,-0.82 -0.41,-1.26 -0.4,-0.45 -1.23,-0.45 -0.83,0 -1.33,0.49 -0.49,0.49 -0.56,1.22z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m291.05,111.41h-1.04v-3.51q0,-0.42 -0.05,-0.79 -0.05,-0.37 -0.18,-0.58 -0.14,-0.23 -0.4,-0.34 -0.26,-0.12 -0.67,-0.12 -0.42,0 -0.89,0.21 -0.46,0.21 -0.89,0.53v4.6L285.9,111.41v-6.16h1.04v0.68q0.49,-0.4 1,-0.63 0.52,-0.23 1.06,-0.23 1,0 1.52,0.6 0.52,0.6 0.52,1.73z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="m296.24,111.36q-0.29,0.08 -0.64,0.13 -0.34,0.05 -0.61,0.05 -0.94,0 -1.43,-0.51 -0.49,-0.51 -0.49,-1.63v-3.27h-0.7v-0.87h0.7v-1.77h1.04v1.77h2.14v0.87h-2.14v2.81q0,0.49 0.02,0.76 0.02,0.27 0.15,0.51 0.12,0.22 0.33,0.33 0.21,0.1 0.65,0.1 0.25,0 0.53,-0.07 0.28,-0.08 0.4,-0.13h0.06z"
+-      android:strokeWidth="8.928"
+-      android:fillColor="#666666"
+-      android:strokeLineCap="round"/>
+-  <path
+-      android:pathData="M138.39,57.46L138.39,57.46A1.77,1.77 0,0 1,140.16 59.23L140.16,131.27A1.77,1.77 0,0 1,138.39 133.04L138.39,133.04A1.77,1.77 0,0 1,136.61 131.27L136.61,59.23A1.77,1.77 0,0 1,138.39 57.46z"
+-      android:strokeWidth="8.92799"
+-      android:fillColor="#f7b27c"
+-      android:strokeLineCap="round"/>
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="320dp" android:height="180dp" android:viewportWidth="192" android:viewportHeight="108">
++    <path android:fillColor="#103B38" android:pathData="M0,0 H192 V108 H0 Z" />
++    <group android:translateX="42">
++    <path android:fillColor="#7BE4CE" android:pathData="M34,38 L74,38 L79,78 Q79,81 75,81 L33,81 Q29,81 29,78 Z" />
++    <path android:fillColor="#00000000" android:strokeColor="#7BE4CE" android:strokeWidth="5" android:strokeLineCap="round" android:pathData="M43,39 L43,32 C43,18 65,18 65,32 L65,39" />
++    <path android:fillColor="#00000000" android:strokeColor="#103B38" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M41,68 L41,50 L54,63 L67,50 L67,68" />
++    </group>
+ </vector>
+diff --git a/app/src/main/res/mipmap-anydpi/ic_launcher.xml b/app/src/main/res/mipmap-anydpi/ic_launcher.xml
+new file mode 100644
+index 0000000..3fdb76b
+--- /dev/null
++++ b/app/src/main/res/mipmap-anydpi/ic_launcher.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="108" android:viewportHeight="108">
++    <path android:fillColor="#103B38" android:pathData="M20,0 L88,0 Q108,0 108,20 L108,88 Q108,108 88,108 L20,108 Q0,108 0,88 L0,20 Q0,0 20,0 Z" />
++    <path android:fillColor="#7BE4CE" android:pathData="M34,38 L74,38 L79,78 Q79,81 75,81 L33,81 Q29,81 29,78 Z" />
++    <path android:fillColor="#00000000" android:strokeColor="#7BE4CE" android:strokeWidth="5" android:strokeLineCap="round" android:pathData="M43,39 L43,32 C43,18 65,18 65,32 L65,39" />
++    <path android:fillColor="#00000000" android:strokeColor="#103B38" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M41,68 L41,50 L54,63 L67,50 L67,68" />
++</vector>
+diff --git a/app/src/main/res/mipmap-anydpi/ic_launcher_round.xml b/app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
+new file mode 100644
+index 0000000..3fdb76b
+--- /dev/null
++++ b/app/src/main/res/mipmap-anydpi/ic_launcher_round.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="108" android:viewportHeight="108">
++    <path android:fillColor="#103B38" android:pathData="M20,0 L88,0 Q108,0 108,20 L108,88 Q108,108 88,108 L20,108 Q0,108 0,88 L0,20 Q0,0 20,0 Z" />
++    <path android:fillColor="#7BE4CE" android:pathData="M34,38 L74,38 L79,78 Q79,81 75,81 L33,81 Q29,81 29,78 Z" />
++    <path android:fillColor="#00000000" android:strokeColor="#7BE4CE" android:strokeWidth="5" android:strokeLineCap="round" android:pathData="M43,39 L43,32 C43,18 65,18 65,32 L65,39" />
++    <path android:fillColor="#00000000" android:strokeColor="#103B38" android:strokeWidth="5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M41,68 L41,50 L54,63 L67,50 L67,68" />
++</vector>
+diff --git a/app/src/main/res/values/ic_launcher_background.xml b/app/src/main/res/values/ic_launcher_background.xml
+index 64088a9..ac1deee 100644
+--- a/app/src/main/res/values/ic_launcher_background.xml
++++ b/app/src/main/res/values/ic_launcher_background.xml
+@@ -1,4 +1,2 @@
+ <?xml version="1.0" encoding="utf-8"?>
+-<resources>
+-    <color name="ic_launcher_background">#191C1A</color>
+-</resources>
+\ No newline at end of file
++<resources><color name="ic_launcher_background">#103B38</color></resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index d5382b9..0c193c5 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+-    <string name="application_name" translatable="false">Droid-ify</string>
++    <string name="application_name" translatable="false">Ming Store</string>
+     <string name="cleartext_allowed" translatable="false">false</string>
+     <string name="action_failed">Action failed</string>
+     <string name="add_repository">Add repository</string>
+diff --git a/app/src/test/kotlin/com/looker/droidify/database/table/PrivateStoreDatabaseTest.kt b/app/src/test/kotlin/com/looker/droidify/database/table/PrivateStoreDatabaseTest.kt
+new file mode 100644
+index 0000000..14d77e1
+--- /dev/null
++++ b/app/src/test/kotlin/com/looker/droidify/database/table/PrivateStoreDatabaseTest.kt
+@@ -0,0 +1,162 @@
++package com.looker.droidify.database.table
++
++import android.app.Application
++import android.content.Context
++import android.database.sqlite.SQLiteDatabase
++import androidx.test.core.app.ApplicationProvider
++import com.looker.droidify.StoreConfig
++import com.looker.droidify.database.Database.RepositoryAdapter
++import com.looker.droidify.database.Database.Schema
++import com.looker.droidify.database.Database.jsonParse
++import com.looker.droidify.index.OemRepositoryParser
++import com.looker.droidify.model.Repository
++import com.looker.droidify.utility.serialization.repository
++import io.mockk.every
++import io.mockk.mockkObject
++import io.mockk.unmockkObject
++import io.mockk.verify
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(application = Application::class, manifest = Config.NONE, sdk = [35])
++class PrivateStoreDatabaseTest {
++
++    private lateinit var context: Context
++    private lateinit var helper: DatabaseHelper
++
++    @Before
++    fun setUp() {
++        context = ApplicationProvider.getApplicationContext()
++        context.deleteDatabase("droidify")
++        helper = DatabaseHelper(context)
++        mockkObject(OemRepositoryParser)
++        every { OemRepositoryParser.getSystemDefaultRepos() } returns listOf(
++            Repository.newRepository("https://device.example.invalid/repo", "DEVICE", ""),
++        )
++    }
++
++    @After
++    fun tearDown() {
++        helper.close()
++        context.deleteDatabase("droidify")
++        unmockkObject(OemRepositoryParser)
++    }
++
++    @Test
++    fun firstCreationSeedsOnlyTheEnabledPrivateRepositoryWithPinnedFingerprint() {
++        val repos = repositories(helper.writableDatabase)
++
++        assertEquals(1, repos.size)
++        val repo = repos.single()
++        assertEquals(StoreConfig.REPO_URL, repo.address)
++        assertEquals("Ming Store", repo.name)
++        assertEquals(
++            StoreConfig.REPO_FINGERPRINT,
++            repo.fingerprint,
++        )
++        assertTrue(repo.enabled)
++        assertEquals(0L, repo.updated)
++        assertTrue(repo.mirrors.isEmpty())
++        // Database.init returns this flag to trigger Droidify's initial automatic sync.
++        assertTrue(helper.created)
++        assertFalse(helper.updated)
++        verify(exactly = 0) { OemRepositoryParser.getSystemDefaultRepos() }
++    }
++
++    @Test
++    fun reopeningPreservesDisabledRepositoryEditsAndUserAddedRepositories() {
++        val db = helper.writableDatabase
++        val privateRepo = repositories(db).single().copy(
++            address = "https://custom.example.invalid/repo",
++            fingerprint = "USER_PIN",
++            authentication = "USER_AUTH",
++            enabled = false,
++        )
++        RepositoryAdapter.put(privateRepo, database = db)
++        RepositoryAdapter.put(
++            Repository.newRepository("https://extra.example.invalid/repo", "EXTRA_PIN", ""),
++            database = db,
++        )
++        val expected = repositories(db)
++
++        val reopened = reopen()
++
++        assertEquals(expected, repositories(reopened))
++        assertFalse(helper.created)
++        assertFalse(helper.updated)
++    }
++
++    @Test
++    fun upgradingPreservesDisabledStateAndRepositoryConfiguration() {
++        val db = helper.writableDatabase
++        val privateRepo = repositories(db).single().copy(
++            enabled = false,
++            fingerprint = "USER_PIN",
++            name = "My repository",
++        )
++        RepositoryAdapter.put(privateRepo, database = db)
++        db.version -= 1
++
++        val upgraded = reopen()
++
++        assertEquals(listOf(privateRepo), repositories(upgraded))
++        assertFalse(helper.created)
++        assertTrue(helper.updated)
++        verify(exactly = 0) { OemRepositoryParser.getSystemDefaultRepos() }
++    }
++
++    @Test
++    fun intentionallyEmptyRepositoryListStaysEmptyAcrossReopenAndUpgrade() {
++        val db = helper.writableDatabase
++        db.delete(Schema.Repository.name, null, null)
++
++        val reopened = reopen()
++        assertTrue(repositories(reopened).isEmpty())
++        assertFalse(helper.created)
++        assertFalse(helper.updated)
++
++        reopened.version -= 1
++        val upgraded = reopen()
++        assertTrue(repositories(upgraded).isEmpty())
++        assertFalse(helper.created)
++        assertTrue(helper.updated)
++    }
++
++    private fun reopen(): SQLiteDatabase {
++        helper.close()
++        helper = DatabaseHelper(context)
++        return helper.writableDatabase
++    }
++
++    private fun repositories(db: SQLiteDatabase): List<Repository> = buildList {
++        db.query(
++            Schema.Repository.name,
++            null,
++            "${Schema.Repository.ROW_DELETED} = 0",
++            null,
++            null,
++            null,
++            Schema.Repository.ROW_ID,
++        ).use { cursor ->
++            while (cursor.moveToNext()) {
++                val data = cursor.getBlob(cursor.getColumnIndexOrThrow(Schema.Repository.ROW_DATA))
++                add(
++                    data.jsonParse { it.repository() }.copy(
++                        id = cursor.getLong(cursor.getColumnIndexOrThrow(Schema.Repository.ROW_ID)),
++                        enabled = cursor.getInt(
++                            cursor.getColumnIndexOrThrow(Schema.Repository.ROW_ENABLED),
++                        ) != 0,
++                    ),
++                )
++            }
++        }
++    }
++}
+diff --git a/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt b/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
+index 6f6ed35..9bfe35e 100644
+--- a/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
++++ b/app/src/test/kotlin/com/looker/droidify/datastore/PreferenceSettingsRepositoryTest.kt
+@@ -55,6 +55,27 @@ class PreferenceSettingsRepositoryTest {
+         assertEquals(AutoSync.WIFI_ONLY, settings.autoSync)
+         assertEquals(SortOrder.UPDATED, settings.sortOrder)
+         assertFalse(settings.dynamicTheme)
++        assertFalse(settings.dlStatsEnabled)
++        assertFalse(settings.rbLogsEnabled)
++        assertFalse(Settings().dlStatsEnabled)
++        assertFalse(Settings().rbLogsEnabled)
++    }
++
++    @Test
++    fun `third party metadata settings preserve explicit user choices`() = testScope.runTest {
++        repository.setDownloadStatisticsEnabled(true)
++        repository.setRBLogsEnabled(true)
++
++        val enabled = repository.getInitial()
++        assertTrue(enabled.dlStatsEnabled)
++        assertTrue(enabled.rbLogsEnabled)
++
++        repository.setDownloadStatisticsEnabled(false)
++        repository.setRBLogsEnabled(false)
++
++        val disabled = repository.getInitial()
++        assertFalse(disabled.dlStatsEnabled)
++        assertFalse(disabled.rbLogsEnabled)
+     }
+ 
+     @Test
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+index ad7845b..4dddcf8 100644
+--- a/gradle/wrapper/gradle-wrapper.properties
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -1,6 +1,7 @@
+ distributionBase=GRADLE_USER_HOME
+ distributionPath=wrapper/dists
+ distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.1-bin.zip
++distributionSha256Sum=acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a
+ networkTimeout=10000
+ retries=0
+ retryBackOffMs=500

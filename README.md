@@ -44,6 +44,8 @@ python3 scripts/upload.py /path/to/app-release.apk \
 - [Rooted Android 部署](docs/android-deployment.md)
 - [安全边界与公开范围](SECURITY.md)
 - [早期方案调研](docs/open-source-options.md)
+- [Android 客户端构建、配置与自更新](client/README.md)
+- [项目结构、代码归属与公开边界](docs/project-layout.md)
 
 ## 测试与 CI
 
@@ -61,4 +63,4 @@ GitHub Actions 在推送 `main`、向 `main` 提交 PR 和手动运行时触发�
 
 ## 许可证
 
-本仓库自有代码采用 [MIT](LICENSE)。第三方依赖保持其各自许可证；`fdroidserver` 通过独立命令调用，其发行包声明 AGPL v3 或更新版本。本仓库不分发 APK、Droid-ify 客户端、Linux rootfs 或第三方二进制工具。分发包含这些依赖的镜像时，还需遵循相应依赖的许可证。
+本仓库服务端自有代码采用 [MIT](LICENSE)。`client/patches/` 中的 Droid-ify 客户端修复补丁及派生 Android 代码采用 [GPL-3.0-or-later](client/LICENSE)，保留上游署名。第三方依赖保持其各自许可证；`fdroidserver` 通过独立命令调用，其发行包声明 AGPL v3 或更新版本。本仓库不分发 APK、Droid-ify 客户端、Linux rootfs 或第三方二进制工具。分发包含这些依赖的镜像时，还需遵循相应依赖的许可证。
