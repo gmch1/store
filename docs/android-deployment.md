@@ -62,3 +62,23 @@ API Key 使用 `/run/secrets/store_api_key`，仅让 API 工作进程读取；�
 手机可维护自己的 AAAA 记录并通过 Caddy 提供 IPv6 HTTPS。独立 IPv4 代理参考 `deploy/android/Caddyfile.ipv4.example`：上游只解析 AAAA、校验 TLS 域名，避免固定 A 指向代理自身后形成回环。公开入口仅转发 GET/HEAD 下载和健康检查。
 
 DDNS 只修改配置中具有匹配管理标记的 AAAA，保留其他 A 记录；缺少记录时需显式执行 `update_dns.py --initialize`。验证域名和 Token 权限后再启动 `ddns`。DNS、证书、网络可达性和设备重启恢复需在实际环境验证，CI 不访问真实设备。
+
+## 客户端源码下载
+
+发布 Ming Store APK 时，将对应完整源码按最终 APK SHA-256 命名，长期保存在
+`/data/client-sources/<apk-sha256>.tar.gz`，权限 0644，目录权限 0755。按哈希命名的文件
+保持不可变；相同路径已存在时先核对哈希，不覆盖不同内容。此目录独立于仓库 generation，
+普通 APK 发布和旧 generation 清理不会删除源码。
+
+将 `client-downloads.example.caddy` 复制到私有 `/config/client-downloads.caddy`，
+在现有 Caddy 的下载站点内添加 `import /config/client-downloads.caddy`。先校验配置，
+再按所用 Caddy 版本支持的方式加载配置，保留现有 TLS、DNS 和签名身份。
+
+- 永久地址：`/fdroid/repo/client-sources/<apk-sha256>.tar.gz`。
+- 当前版本：`/fdroid/repo/client-source.tar.gz`，读取目录中的 `current.tar.gz` 相对符号链接。
+- 根路径别名 `/client-sources/...`、`/client-source.tar.gz` 供直接连接下载站点的旧链接使用。
+
+仓库前缀可复用现有 IPv4 转发规则。私有 `.env.client` 的 `STORE_CLIENT_SOURCE_URL`
+应指向自身域名的 `/fdroid/repo/client-source.tar.gz`，无需在每次升级时修改客户端源码链接。
+源码文件先完整写入隐藏临时文件、校验并原子改名；`current.tar.gz` 也通过临时链接加
+原子替换更新。公开发布 APK 前，检查永久源码地址可用，GET/HEAD/Range 与本地源码哈希一致。

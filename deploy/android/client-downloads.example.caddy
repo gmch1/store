@@ -1,0 +1,28 @@
+@client_source_archive {
+    method GET HEAD
+    path_regexp client_source_archive ^/(?:fdroid/repo/)?client-sources/([a-f0-9]{64}\.tar\.gz)$
+}
+handle @client_source_archive {
+    rewrite * /{re.client_source_archive.1}
+    root * /data/client-sources
+    header {
+        Content-Type application/gzip
+        Cache-Control "public, max-age=31536000, immutable"
+        X-Content-Type-Options nosniff
+    }
+    file_server
+}
+@client_source_current {
+    method GET HEAD
+    path /client-source.tar.gz /fdroid/repo/client-source.tar.gz
+}
+handle @client_source_current {
+    rewrite * /current.tar.gz
+    root * /data/client-sources
+    header {
+        Content-Type application/gzip
+        Cache-Control no-cache
+        X-Content-Type-Options nosniff
+    }
+    file_server
+}
